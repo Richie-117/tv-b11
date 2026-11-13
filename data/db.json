@@ -2546,7 +2546,7 @@
       "id": "admin-1",
       "username": "ucrtvrepb11",
       "email": "hesansamudika20@gmail.com",
-      "passwordHash": "$2a$10$4slJ4CixRQRsF6jsoLI/7Op6.JZCsRdKfJRaTaxxm0MguuqOBlzEm",
+      "passwordHash": "\\$.yknmx4.JWTz5znDesNC2Ot1pYSKMjTikozj.7FVEP3J0YzVCDUiC",
       "name": "Television Studies Administrator",
       "role": "superadmin",
       "permissions": [
@@ -2567,6 +2567,23 @@
     }
   ],
   "attendanceSessions": [
+    {
+      "date": "2026-11-20",
+      "course": "TPOPT",
+      "moduleId": "mod-1",
+      "moduleCode": "POST-5101",
+      "moduleTitle": "Non-Linear Video Editing & Workflow Systems",
+      "sessionType": "lecture",
+      "totalStudents": 1,
+      "presentCount": 1,
+      "absentCount": 0,
+      "markedByAdminId": "admin-1",
+      "markedByAdminName": "Television Studies Administrator",
+      "notes": "Updated notes after audit edit",
+      "id": "att-sess-1794571875484-l5iw",
+      "createdAt": "2026-11-13T12:11:15.484Z",
+      "updatedAt": "2026-11-13T12:11:15.484Z"
+    },
     {
       "date": "2026-11-20",
       "course": "TPOPT",
@@ -3218,6 +3235,17 @@
       "status": "present",
       "markedAt": "2026-11-13T11:38:02.120Z",
       "updatedAt": "2026-11-13T11:38:02.120Z"
+    },
+    {
+      "id": "att-rec-1794571875484-0",
+      "sessionId": "att-sess-1794571875484-l5iw",
+      "studentId": "tpopt-02",
+      "studentNumber": "RT/TPOPT/26/02",
+      "studentName": "P.A. Hesan Samudika",
+      "course": "TPOPT",
+      "status": "present",
+      "markedAt": "2026-11-13T12:11:15.484Z",
+      "updatedAt": "2026-11-13T12:11:15.484Z"
     }
   ],
   "assignments": [],
