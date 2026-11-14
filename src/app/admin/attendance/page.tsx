@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   CheckSquare,
@@ -30,6 +30,7 @@ import {
   Smartphone,
   Send,
   CheckCheck,
+  RefreshCw,
 } from 'lucide-react';
 import { AttendanceSession, AttendanceRecord, AttendanceCheckin, CourseModule, Student, CourseType } from '@/types';
 import { generateStudentsPDF, generateSessionAttendancePDF, DEFAULT_DOCUMENT_OPTIONS } from '@/lib/pdfGenerator';
@@ -82,7 +83,7 @@ export default function AttendancePage() {
 
   // Marking session form state
   const [markDate, setMarkDate] = useState(() => new Date().toISOString().split('T')[0]);
-  const [markCourse, setMarkCourse] = useState<CourseType>(initialCourse);
+  const [markCourse, setMarkCourse] = useState<CourseType | 'ALL'>(initialCourse);
   const [markModuleId, setMarkModuleId] = useState<string>('sub-ict');
   const [markSessionType, setMarkSessionType] = useState<'lecture' | 'practical' | 'workshop' | 'other'>('practical');
   const [markNotes, setMarkNotes] = useState<string>('');
@@ -142,19 +143,11 @@ export default function AttendancePage() {
   const availableTimetableLectures = useMemo(() => {
     if (!allTimetables || allTimetables.length === 0) return [];
 
-    const timetable = allTimetables.find((t) => t.course === markCourse);
-    if (!timetable || !timetable.slots) return [];
+    const timetables =
+      markCourse === 'ALL'
+        ? allTimetables
+        : allTimetables.filter((t) => t.course === markCourse);
 
-    const daySlots = timetable.slots
-      .filter(
-        (s: any) =>
-          s.dayOfWeek.toLowerCase() === currentDayName.toLowerCase() &&
-          s.slotType === 'class' &&
-          Boolean(s.subject?.trim())
-      )
-      .sort((a: any, b: any) => (a.sortOrder || 0) - (b.sortOrder || 0));
-
-    // Consolidate contiguous slots with same subject
     const consolidated: Array<{
       id: string;
       subject: string;
@@ -169,7 +162,33 @@ export default function AttendancePage() {
       room?: string;
     }> = [];
 
-    daySlots.forEach((slot: any) => {
+    // Collect all slots for current day
+    const allSlots: any[] = [];
+    timetables.forEach((timetable) => {
+      if (timetable.slots) {
+        timetable.slots
+          .filter(
+            (s: any) =>
+              s.dayOfWeek.toLowerCase() === currentDayName.toLowerCase() &&
+              s.slotType === 'class' &&
+              Boolean(s.subject?.trim())
+          )
+          .forEach((slot: any) => {
+            const exists = allSlots.some(
+              (ex) =>
+                ex.subject.toLowerCase() === slot.subject.toLowerCase() &&
+                ex.startTime === slot.startTime
+            );
+            if (!exists) {
+              allSlots.push(slot);
+            }
+          });
+      }
+    });
+
+    allSlots.sort((a: any, b: any) => (a.sortOrder || 0) - (b.sortOrder || 0));
+
+    allSlots.forEach((slot: any) => {
       const last = consolidated[consolidated.length - 1];
       if (last && last.subject === slot.subject && last.endTime === slot.startTime) {
         last.endTime = slot.endTime;
@@ -235,9 +254,16 @@ export default function AttendancePage() {
     });
   };
 
-  const syncModuleWithLiveLecture = (targetCourse: 'TPOPT' | 'TPRPT', liveData: any) => {
+  const syncModuleWithLiveLecture = (targetCourse: CourseType | 'ALL', liveData: any) => {
     if (!liveData) return;
-    const activeStatus = targetCourse === 'TPOPT' ? liveData.tpopt : liveData.tprpt;
+    const activeStatus =
+      targetCourse === 'TPRPT'
+        ? liveData.tprpt
+        : targetCourse === 'TPOPT'
+        ? liveData.tpopt
+        : liveData.tpopt?.currentSlot
+        ? liveData.tpopt
+        : liveData.tprpt;
     const slot = activeStatus?.currentSlot || activeStatus?.nextSlot;
     if (slot && slot.subject) {
       setLiveSyncedSlot(slot);
@@ -306,53 +332,65 @@ export default function AttendancePage() {
     fetchInitialData();
   }, []);
 
-  const handleCourseChange = (newCourse: CourseType) => {
+  const handleCourseChange = (newCourse: CourseType | 'ALL') => {
     setMarkCourse(newCourse);
-    syncModuleWithLiveLecture(newCourse, liveTimetableData);
+    if (newCourse !== 'ALL') {
+      syncModuleWithLiveLecture(newCourse, liveTimetableData);
+    } else {
+      if (liveTimetableData?.currentSlot) {
+        setSyncedBanner({
+          subject: liveTimetableData.currentSlot.subject,
+          timeRange: `${liveTimetableData.currentSlot.startTime} - ${liveTimetableData.currentSlot.endTime}`,
+          isLive: true,
+        });
+      }
+    }
   };
 
   // Students eligible for current marking session
   const eligibleStudents = useMemo(() => {
+    if (markCourse === 'ALL') return students;
     return students.filter((s) => s.course === markCourse);
   }, [students, markCourse]);
 
   // Poll for active live check-in sessions while in marking mode
+  const pollActiveCheckins = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/admin/attendance/checkin/push?course=${markCourse}&date=${markDate}`);
+      if (res.ok) {
+        const d = await res.json();
+        if (d.hasActiveSession && d.session) {
+          setLiveCheckinActive(true);
+          setLiveCheckinSessionId(d.session.id);
+          const ids = new Set<string>(d.checkedInStudentIds || []);
+          setCheckedInStudentIds(ids);
+
+          // Automatically mark checked-in students as present in the roll-call list
+          if (ids.size > 0) {
+            setRecordsMap((prev) => {
+              const updated = { ...prev };
+              ids.forEach((id) => {
+                updated[id] = 'present';
+              });
+              return updated;
+            });
+          }
+        } else {
+          setLiveCheckinActive(false);
+          setLiveCheckinSessionId(null);
+        }
+      }
+    } catch (e) {}
+  }, [markCourse, markDate]);
+
   useEffect(() => {
     if (viewMode !== 'marking') return;
 
-    const pollActiveCheckins = async () => {
-      try {
-        const res = await fetch(`/api/admin/attendance/checkin/push?course=${markCourse}&date=${markDate}`);
-        if (res.ok) {
-          const d = await res.json();
-          if (d.hasActiveSession && d.session) {
-            setLiveCheckinActive(true);
-            setLiveCheckinSessionId(d.session.id);
-            const ids = new Set<string>(d.checkedInStudentIds || []);
-            setCheckedInStudentIds(ids);
-
-            // Automatically mark checked-in students as present in the roll-call list
-            if (ids.size > 0) {
-              setRecordsMap((prev) => {
-                const updated = { ...prev };
-                ids.forEach((id) => {
-                  updated[id] = 'present';
-                });
-                return updated;
-              });
-            }
-          } else {
-            setLiveCheckinActive(false);
-            setLiveCheckinSessionId(null);
-          }
-        }
-      } catch (e) {}
-    };
-
     pollActiveCheckins();
-    const interval = setInterval(pollActiveCheckins, 3000);
+    // Gentle 10s interval to prevent log spamming while keeping real-time sync active
+    const interval = setInterval(pollActiveCheckins, 10000);
     return () => clearInterval(interval);
-  }, [viewMode, markCourse, markDate]);
+  }, [viewMode, pollActiveCheckins]);
 
   // Initialize attendance records when eligible students change (default absent unless checked in)
   useEffect(() => {
@@ -821,6 +859,16 @@ export default function AttendancePage() {
         </div>
 
         <div className="flex items-center gap-2 self-start sm:self-center flex-wrap">
+          <a
+            href="/check-in"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#FF7900]/15 hover:bg-[#FF7900]/25 text-[#FF7900] hover:text-[#FFA040] border border-[#FF7900]/40 text-xs font-bold touch-target transition-colors shadow-sm shadow-[#FF7900]/10"
+            title="Open public check-in terminal for students in new tab"
+          >
+            <Radio className="w-4 h-4 text-[#FF7900] animate-pulse" />
+            <span>Check-In Tab</span>
+          </a>
           <button
             type="button"
             disabled={isExportingExcel}
@@ -901,7 +949,7 @@ export default function AttendancePage() {
               <div className="flex items-center gap-2 text-white">
                 <Sparkles className="w-4 h-4 text-[#38BDF8] flex-shrink-0" />
                 <span>
-                  <strong>⚡ Timetable Synced:</strong> {syncedBanner.subject} ({syncedBanner.timeRange}) · Programme: <strong>{markCourse}</strong>
+                  <strong>⚡ Timetable Synced:</strong> {syncedBanner.subject} ({syncedBanner.timeRange}) · Programme: <strong>{markCourse === 'ALL' ? 'Both (Common)' : markCourse}</strong>
                 </span>
               </div>
               <span className="px-2.5 py-0.5 rounded-full bg-[#0088FF] text-white font-mono text-[10px] font-bold self-start sm:self-auto">
@@ -947,11 +995,11 @@ export default function AttendancePage() {
                 <label className="block text-xs font-bold text-slate-300 mb-1">
                   Target Programme
                 </label>
-                <div className="grid grid-cols-2 gap-1.5">
+                <div className="grid grid-cols-3 gap-1.5">
                   <button
                     type="button"
                     onClick={() => handleCourseChange('TPOPT')}
-                    className={`py-2 px-3 rounded-xl text-xs font-bold transition-all touch-target ${
+                    className={`py-2 px-2 rounded-xl text-xs font-bold transition-all touch-target text-center ${
                       markCourse === 'TPOPT'
                         ? 'bg-[#FF7900] text-white shadow-md shadow-[#FF7900]/20'
                         : 'bg-[#161F30] text-slate-400 hover:text-white border border-[#23324A]'
@@ -962,13 +1010,24 @@ export default function AttendancePage() {
                   <button
                     type="button"
                     onClick={() => handleCourseChange('TPRPT')}
-                    className={`py-2 px-3 rounded-xl text-xs font-bold transition-all touch-target ${
+                    className={`py-2 px-2 rounded-xl text-xs font-bold transition-all touch-target text-center ${
                       markCourse === 'TPRPT'
                         ? 'bg-[#0088FF] text-white shadow-md shadow-[#0088FF]/20'
                         : 'bg-[#161F30] text-slate-400 hover:text-white border border-[#23324A]'
                     }`}
                   >
                     TPRPT (22)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleCourseChange('ALL')}
+                    className={`py-2 px-2 rounded-xl text-xs font-bold transition-all touch-target text-center ${
+                      markCourse === 'ALL'
+                        ? 'bg-gradient-to-r from-[#FF7900] to-[#0088FF] text-white shadow-md shadow-indigo-500/25 ring-1 ring-white/20'
+                        : 'bg-[#161F30] text-slate-400 hover:text-white border border-[#23324A]'
+                    }`}
+                  >
+                    Both (48)
                   </button>
                 </div>
               </div>
@@ -997,7 +1056,7 @@ export default function AttendancePage() {
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-bold text-white flex items-center gap-1.5">
                     <Calendar className="w-3.5 h-3.5 text-[#FF7900]" />
-                    <span>Available Timetable Lectures ({currentDayName} — {markCourse}):</span>
+                    <span>Available Timetable Lectures ({currentDayName} — {markCourse === 'ALL' ? 'Both Programmes' : markCourse}):</span>
                   </span>
                   <span className="text-[10px] text-[#38BDF8]">Tap any lecture to auto-sync</span>
                 </div>
@@ -1063,7 +1122,7 @@ export default function AttendancePage() {
                 className="w-full px-3 py-2.5 rounded-xl bg-[#161F30] border border-[#23324A] text-xs text-white focus:outline-none focus:border-[#FF7900] touch-target font-semibold"
               >
                 {availableTimetableLectures.length > 0 && (
-                  <optgroup label={`📅 Available Lectures from Timetable (${currentDayName} — ${markCourse})`}>
+                  <optgroup label={`📅 Available Lectures from Timetable (${currentDayName} — ${markCourse === 'ALL' ? 'Both Programmes' : markCourse})`}>
                     {availableTimetableLectures.map((l) => (
                       <option key={l.id} value={`tt-${l.id}`}>
                         ★ [Timetable] {l.subject} ({l.timeLabel}) — {l.mappedModuleCode}
@@ -1106,14 +1165,25 @@ export default function AttendancePage() {
 
               <div className="flex items-center gap-2 w-full sm:w-auto">
                 {liveCheckinActive ? (
-                  <button
-                    type="button"
-                    disabled={isPushingCheckin}
-                    onClick={handleCloseLiveCheckin}
-                    className="w-full sm:w-auto px-4 py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-xs font-bold transition-all touch-target"
-                  >
-                    Close Check-In Window
-                  </button>
+                  <div className="flex items-center gap-2 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => pollActiveCheckins()}
+                      className="px-3.5 py-2 rounded-xl bg-[#1E293B] hover:bg-[#2A3B52] text-slate-300 hover:text-white border border-[#334155] text-xs font-bold transition-all flex items-center gap-1.5 touch-target shadow-sm active:scale-95"
+                      title="Sync student mobile check-ins immediately"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 text-[#38BDF8]" />
+                      <span>Sync</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isPushingCheckin}
+                      onClick={handleCloseLiveCheckin}
+                      className="w-full sm:w-auto px-4 py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-xs font-bold transition-all touch-target"
+                    >
+                      Close Check-In Window
+                    </button>
+                  </div>
                 ) : (
                   <button
                     type="button"

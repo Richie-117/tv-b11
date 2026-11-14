@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
       targetSession = allSessions.find(
         (s) =>
           s.checkinStatus === 'active' &&
-          (s.course === 'ALL' || s.course === course)
+          (course === 'ALL' || s.course === 'ALL' || s.course === course)
       ) || null;
     }
 
@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
       session = allSessions.find(
         (s) =>
           s.date === date &&
-          (s.course === course || s.course === 'ALL') &&
+          (s.course === course || s.course === 'ALL' || course === 'ALL') &&
           (s.moduleId === moduleId || s.moduleTitle === moduleTitle)
       );
 

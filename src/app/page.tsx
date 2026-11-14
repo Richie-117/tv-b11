@@ -68,13 +68,21 @@ export default function HomePage() {
             Leading television production, multi-camera broadcasting, and digital post-production training for Batch 11.
           </p>
 
-          <div className="pt-2 flex items-center justify-center">
+          <div className="pt-2 flex items-center justify-center gap-3 flex-wrap">
             <Link
               href="/login"
               className="flex items-center gap-2 px-6 py-3.5 rounded-2xl bg-[#FF7900] hover:bg-[#E66C00] text-white text-sm font-bold shadow-xl shadow-[#FF7900]/25 transition-all active:scale-95 touch-target"
             >
               <span>Sign In to Portal</span>
               <ArrowRight className="w-4 h-4" />
+            </Link>
+
+            <Link
+              href="/check-in"
+              className="flex items-center gap-2 px-5 py-3.5 rounded-2xl bg-[#1E293B] hover:bg-[#283852] text-white text-sm font-bold border border-[#334155] shadow-lg transition-all active:scale-95 touch-target"
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span>Live Check-In Tab</span>
             </Link>
           </div>
         </div>

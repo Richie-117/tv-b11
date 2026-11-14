@@ -413,6 +413,17 @@ export default function LoginPage() {
           )}
         </div>
 
+        {/* Quick Check-In Terminal shortcut */}
+        <div className="mt-4 p-3 rounded-xl bg-white/5 border border-white/10 text-center">
+          <a
+            href="/check-in"
+            className="text-xs text-slate-300 hover:text-white inline-flex items-center gap-1.5 transition-colors font-medium"
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span>Need quick lecture attendance? <strong className="text-[#38BDF8] underline underline-offset-2">Open Check-In Tab →</strong></span>
+          </a>
+        </div>
+
         {/* Minimal friendly footer */}
         <p className="text-center text-xs text-slate-500 mt-6">
           Authorized Academic Staff, Representatives & Students · UCR TV Studies
