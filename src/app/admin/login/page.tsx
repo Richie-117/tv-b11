@@ -12,6 +12,7 @@ export default function LoginPage() {
   // Sign In Form State
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
@@ -21,6 +22,34 @@ export default function LoginPage() {
   const [newPassword, setNewPassword] = useState('');
   const [activateSuccess, setActivateSuccess] = useState('');
   const [isActivating, setIsActivating] = useState(false);
+
+  // Auto-restore saved login details & check if already authenticated
+  React.useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const savedUser = localStorage.getItem('ucr_saved_login_user');
+      if (savedUser) {
+        setUsername(savedUser);
+      }
+      const savedRemember = localStorage.getItem('ucr_remember_me');
+      if (savedRemember !== null) {
+        setRememberMe(savedRemember === 'true');
+      }
+
+      // If already logged in, redirect directly without showing login form
+      fetch('/api/auth/me')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data?.authenticated && data?.user) {
+            if (data.user.role === 'student') {
+              router.replace('/student');
+            } else {
+              router.replace('/admin');
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }, [router]);
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,6 +75,13 @@ export default function LoginPage() {
         clearPortalCache();
         if (typeof window !== 'undefined') {
           localStorage.setItem('ucr_user_role', data.user?.role || 'admin');
+          if (rememberMe) {
+            localStorage.setItem('ucr_saved_login_user', username.trim());
+            localStorage.setItem('ucr_remember_me', 'true');
+          } else {
+            localStorage.removeItem('ucr_saved_login_user');
+            localStorage.setItem('ucr_remember_me', 'false');
+          }
         }
 
         if (data.redirectUrl) {
@@ -99,6 +135,8 @@ export default function LoginPage() {
         setActivateSuccess(data.message || 'Account activated successfully!');
         if (typeof window !== 'undefined') {
           localStorage.setItem('ucr_user_role', isRep ? 'representative' : 'student');
+          localStorage.setItem('ucr_saved_login_user', studentIndex.trim());
+          localStorage.setItem('ucr_remember_me', 'true');
         }
         setTimeout(() => {
           if (data.redirectUrl) {
@@ -228,6 +266,21 @@ export default function LoginPage() {
                     required
                   />
                 </div>
+              </div>
+
+              {/* Remember Me / Save Login Details */}
+              <div className="flex items-center justify-between pt-1 pb-1">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    className="w-4 h-4 rounded bg-[#161F30] border-[#23324A] text-[#FF7900] focus:ring-[#FF7900] focus:ring-offset-0 focus:ring-1 cursor-pointer accent-[#FF7900]"
+                  />
+                  <span className="text-xs text-slate-300 font-medium">
+                    Save login details on this device
+                  </span>
+                </label>
               </div>
 
               <button

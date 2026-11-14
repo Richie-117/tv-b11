@@ -5,6 +5,7 @@ import android.annotation.SuppressLint;
 import android.app.DownloadManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.net.ConnectivityManager;
@@ -100,11 +101,17 @@ public class MainActivity extends AppCompatActivity {
         setupBackNavigation();
         setupNetworkMonitoring();
 
-        // Handle deep-link or load production URL
+        // Handle deep-link or load production URL (restoring last authenticated space if available)
         Intent intent = getIntent();
         String targetUrl = DEFAULT_URL;
         if (intent != null && intent.getData() != null) {
             targetUrl = intent.getData().toString();
+        } else {
+            SharedPreferences prefs = getSharedPreferences("tv_b11_prefs", MODE_PRIVATE);
+            String lastAuthUrl = prefs.getString("last_auth_url", null);
+            if (lastAuthUrl != null && !lastAuthUrl.trim().isEmpty()) {
+                targetUrl = lastAuthUrl;
+            }
         }
 
         if (isNetworkAvailable()) {
@@ -144,6 +151,7 @@ public class MainActivity extends AppCompatActivity {
         settings.setSupportZoom(true);
         settings.setBuiltInZoomControls(true);
         settings.setDisplayZoomControls(false);
+        settings.setSaveFormData(true);
 
         // Append custom TV-B11 mobile identifier for responsive optimizations
         String defaultUA = settings.getUserAgentString();
@@ -166,6 +174,15 @@ public class MainActivity extends AppCompatActivity {
                 super.onPageFinished(view, url);
                 swipeRefreshLayout.setRefreshing(false);
                 CookieManager.getInstance().flush();
+
+                if (url != null) {
+                    SharedPreferences prefs = getSharedPreferences("tv_b11_prefs", MODE_PRIVATE);
+                    if ((url.contains("/student") || url.contains("/admin")) && !url.contains("/admin/login")) {
+                        prefs.edit().putString("last_auth_url", url).apply();
+                    } else if (url.contains("/login") || url.contains("/admin/login")) {
+                        prefs.edit().remove("last_auth_url").apply();
+                    }
+                }
             }
 
             @Override
@@ -369,6 +386,12 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onPause() {
         super.onPause();
+        CookieManager.getInstance().flush();
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
         CookieManager.getInstance().flush();
     }
 

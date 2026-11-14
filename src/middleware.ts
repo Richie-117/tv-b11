@@ -55,6 +55,28 @@ export async function middleware(req: NextRequest) {
   const isAdminRoute = pathname.startsWith('/admin') && pathname !== '/admin/login';
   const isStudentRoute = pathname.startsWith('/student');
 
+  // 0. If accessing root '/'
+  if (pathname === '/') {
+    if (sessionPayload) {
+      if (
+        sessionPayload.role === 'superadmin' ||
+        sessionPayload.role === 'representative' ||
+        isBatchRep(sessionPayload.username, sessionPayload.userId)
+      ) {
+        return NextResponse.redirect(new URL('/admin', req.url));
+      } else {
+        return NextResponse.redirect(new URL('/student', req.url));
+      }
+    } else {
+      // If mobile app user agent and not authenticated, take them directly to login page
+      const userAgent = req.headers.get('user-agent') || '';
+      if (userAgent.includes('UCR-TV-B11-Mobile')) {
+        return NextResponse.redirect(new URL('/login', req.url));
+      }
+    }
+    return NextResponse.next();
+  }
+
   // 1. If accessing protected /admin route
   if (isAdminRoute) {
     if (!sessionPayload) {
@@ -92,6 +114,6 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/admin/:path*', '/student/:path*', '/login', '/admin/login'],
+  matcher: ['/', '/admin/:path*', '/student/:path*', '/login', '/admin/login'],
 };
 
