@@ -137,7 +137,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 | Role | Username / Identity | Access & Permissions |
 | :--- | :--- | :--- |
-| **SuperAdmin** | `ucrtvrepb11` / `ucrtvadmin` | Full Division Access: System Admin, Invitations, Backups, Chat Purge |
+| **SuperAdmin** | `******` / `******` | Full Division Access: System Admin, Invitations, Backups, Chat Purge |
 | **Representative (TPOPT / TPRPT)** | Student Index (Activated) | Cohort Attendance, Check-In Broadcast, Timetables, PDF Rosters |
 | **Student** | Student Index (Activated) | 1-Tap Check-In, Own Attendance History, Workspace Deliverables, Division Chat |
 
