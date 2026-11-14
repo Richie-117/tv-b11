@@ -105,7 +105,7 @@ export default function StudentDashboardPage() {
       .catch(() => {});
 
     fetchCheckinState();
-    const interval = setInterval(fetchCheckinState, 5000);
+    const interval = setInterval(fetchCheckinState, 3000);
     return () => clearInterval(interval);
   }, []);
 

@@ -29,12 +29,18 @@ export async function GET(req: NextRequest) {
       targetSession = allSessions.find(
         (s) =>
           s.checkinStatus === 'active' &&
-          (s.course === 'ALL' || s.course === course) &&
-          (!date || s.date === date)
+          (s.course === 'ALL' || s.course === course)
       ) || null;
     }
 
-    if (!targetSession) {
+    if (targetSession) {
+      if (targetSession.checkinExpiresAt && Date.now() > new Date(targetSession.checkinExpiresAt).getTime()) {
+        await updateAttendanceSessionCheckin(targetSession.id, 'expired');
+        targetSession = null;
+      }
+    }
+
+    if (!targetSession || targetSession.checkinStatus !== 'active') {
       return NextResponse.json({
         success: true,
         hasActiveSession: false,
