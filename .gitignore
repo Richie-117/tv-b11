@@ -41,6 +41,14 @@ yarn-error.log*
 .pnpm-debug.log*
 *.log
 
+# Internal Audit & Master Prompt Docs (Keep only README.md)
+/*_AUDIT.md
+/*_REPORT.md
+/*_DESIGN.md
+/*_OPTIMIZATION.md
+/*_README.md
+DEVELOPMENT.md
+
 # Editor & OS Metadata
 .vscode/*
 !.vscode/settings.json
