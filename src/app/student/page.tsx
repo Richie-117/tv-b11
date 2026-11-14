@@ -18,34 +18,80 @@ import {
   CheckSquare,
   Upload,
   User,
+  Radio,
+  RotateCcw,
+  Check,
 } from 'lucide-react';
 import { CourseLiveLectureStatus, SriLankaTimeContext } from '@/lib/timetableService';
+import { getCached, setCached } from '@/lib/portalCache';
 
 export default function StudentDashboardPage() {
   const [liveStatus, setLiveStatus] = useState<{
     tpopt?: CourseLiveLectureStatus;
     tprpt?: CourseLiveLectureStatus;
     context?: SriLankaTimeContext;
-  } | null>(null);
+  } | null>(() => getCached('student_dashboard_live') || null);
 
   const [studentCourse, setStudentCourse] = useState<'TPOPT' | 'TPRPT'>('TPOPT');
-  const [assignments, setAssignments] = useState<any[]>([]);
-  const [attendanceStats, setAttendanceStats] = useState({
-    totalSessions: 0,
-    presentCount: 0,
-    absentCount: 0,
-    attendanceRate: 0,
+  const [assignments, setAssignments] = useState<any[]>(() => getCached('student_dashboard_tasks') || []);
+  const [attendanceStats, setAttendanceStats] = useState(() => {
+    return (
+      getCached<any>('student_dashboard_stats') || {
+        totalSessions: 0,
+        presentCount: 0,
+        absentCount: 0,
+        attendanceRate: 0,
+      }
+    );
   });
+
+  // Check-in State
+  const [checkinState, setCheckinState] = useState<{
+    hasActiveCheckin: boolean;
+    hasCheckedIn: boolean;
+    session: any | null;
+  }>(() => {
+    return (
+      getCached<any>('student_checkin_state') || {
+        hasActiveCheckin: false,
+        hasCheckedIn: false,
+        session: null,
+      }
+    );
+  });
+  const [isSubmittingCheckin, setIsSubmittingCheckin] = useState(false);
+  const [checkinFeedback, setCheckinFeedback] = useState<string | null>(null);
+
+  const fetchCheckinState = async () => {
+    try {
+      const res = await fetch('/api/student/checkin');
+      if (res.ok) {
+        const d = await res.json();
+        setCheckinState({
+          hasActiveCheckin: Boolean(d.hasActiveCheckin),
+          hasCheckedIn: Boolean(d.hasCheckedIn),
+          session: d.session || null,
+        });
+        setCached('student_checkin_state', d);
+      }
+    } catch (e) {}
+  };
 
   useEffect(() => {
     fetch('/api/admin/timetable')
       .then((r) => r.json())
-      .then((d) => setLiveStatus(d.liveStatus || null))
+      .then((d) => {
+        setLiveStatus(d.liveStatus || null);
+        setCached('student_dashboard_live', d.liveStatus || null);
+      })
       .catch(() => {});
 
     fetch('/api/admin/assignments')
       .then((r) => r.json())
-      .then((d) => setAssignments(d.assignments || []))
+      .then((d) => {
+        setAssignments(d.assignments || []);
+        setCached('student_dashboard_tasks', d.assignments || []);
+      })
       .catch(() => {});
 
     fetch('/api/student/attendance')
@@ -53,10 +99,40 @@ export default function StudentDashboardPage() {
       .then((d) => {
         if (d.success && d.stats) {
           setAttendanceStats(d.stats);
+          setCached('student_dashboard_stats', d.stats);
         }
       })
       .catch(() => {});
+
+    fetchCheckinState();
+    const interval = setInterval(fetchCheckinState, 5000);
+    return () => clearInterval(interval);
   }, []);
+
+  const handleStudentCheckin = async () => {
+    if (!checkinState.session?.id) return;
+    setIsSubmittingCheckin(true);
+    setCheckinFeedback(null);
+    try {
+      const res = await fetch('/api/student/checkin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: checkinState.session.id }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setCheckinState((prev) => ({ ...prev, hasCheckedIn: true }));
+        setCheckinFeedback(data.message || `Checked in successfully for ${checkinState.session.moduleTitle}!`);
+        setTimeout(() => setCheckinFeedback(null), 4000);
+      } else {
+        alert(data.error || 'Failed to submit check-in.');
+      }
+    } catch (e: any) {
+      alert(e.message || 'Error submitting check-in.');
+    } finally {
+      setIsSubmittingCheckin(false);
+    }
+  };
 
   const courseStatus = studentCourse === 'TPOPT' ? liveStatus?.tpopt : liveStatus?.tprpt;
 
@@ -103,6 +179,64 @@ export default function StudentDashboardPage() {
           </Link>
         </div>
       </div>
+
+      {/* Real-time Lecture Roll-Call Check-in Card */}
+      {checkinState.hasActiveCheckin && checkinState.session && (
+        <div className="bg-gradient-to-r from-[#111827] via-[#161F30] to-[#111827] border-2 border-[#FF7900] rounded-3xl p-5 sm:p-6 shadow-2xl relative overflow-hidden animate-in fade-in">
+          <div className="absolute top-0 right-0 w-36 h-36 bg-[#FF7900]/10 rounded-full blur-3xl pointer-events-none" />
+
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-5 relative z-10">
+            <div className="space-y-2 max-w-xl">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-black border border-emerald-500/40 animate-pulse flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                  LIVE LECTURE CHECK-IN
+                </span>
+                <span className="font-mono text-xs font-bold text-[#FF7900] bg-[#FF7900]/15 px-2 py-0.5 rounded border border-[#FF7900]/30">
+                  {checkinState.session.course}
+                </span>
+                <span className="text-[11px] text-slate-400 font-medium">
+                  {checkinState.session.date} · {checkinState.session.startTime} - {checkinState.session.endTime}
+                </span>
+              </div>
+
+              <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight font-heading">
+                {checkinState.session.moduleTitle}
+              </h2>
+
+              <p className="text-xs sm:text-sm text-slate-300">
+                Roll-call check-in is active for this lecture. Tap Check-In to mark your attendance.
+              </p>
+
+              {checkinFeedback && (
+                <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold animate-in fade-in">
+                  {checkinFeedback}
+                </div>
+              )}
+            </div>
+
+            {/* Check-in Button / Disappears upon click */}
+            <div className="flex items-center flex-shrink-0">
+              {checkinState.hasCheckedIn ? (
+                <div className="flex items-center gap-2 px-5 py-3 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-sm font-black shadow-lg shadow-emerald-500/15 animate-in fade-in">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                  <span>Checked In · Present</span>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={isSubmittingCheckin}
+                  onClick={handleStudentCheckin}
+                  className="flex items-center justify-center gap-2 px-8 py-3.5 rounded-2xl bg-[#FF7900] hover:bg-[#E66C00] text-white text-base font-black shadow-xl shadow-[#FF7900]/30 transition-all active:scale-95 touch-target min-h-[48px] uppercase tracking-wider cursor-pointer"
+                >
+                  <Radio className="w-4 h-4 animate-pulse" />
+                  <span>{isSubmittingCheckin ? 'Checking In...' : 'Check-In'}</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 1. FIRSTLY: Attendance Rate Hero Card (Starts at 0% when zero sessions recorded) */}
       <div className="bg-[#111827] border border-[#1E293B] rounded-2xl p-5 shadow-xl relative overflow-hidden">

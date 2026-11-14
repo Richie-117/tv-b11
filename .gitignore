@@ -24,6 +24,8 @@ service-account*.json
 
 # Private Backups, Data Dumps & Student Exports (CRITICAL: NEVER COMMIT)
 /backups/
+/data/backups/
+data/backups/
 *.dump
 /data/*.private.*
 /exports/

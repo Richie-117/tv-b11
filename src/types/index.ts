@@ -81,6 +81,9 @@ export interface AttendanceSession {
   moduleTitle: string;
   sessionType: 'lecture' | 'practical' | 'workshop' | 'other';
   sessionStatus?: AttendanceSessionStatus;
+  checkinStatus?: 'closed' | 'active' | 'expired';
+  checkinOpenedAt?: string;
+  checkinExpiresAt?: string;
   stage?: 'Foundation' | 'Level 5' | 'Level 6' | string;
   semester?: string;
   startTime?: string;
@@ -94,6 +97,22 @@ export interface AttendanceSession {
   notes?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export type CheckinStatus = 'submitted' | 'withdrawn' | 'confirmed';
+
+export interface AttendanceCheckin {
+  id: string;
+  sessionId: string;
+  studentId: string;
+  studentNumber: string;
+  studentName: string;
+  course: CourseType;
+  status: CheckinStatus;
+  submittedAt: string;
+  withdrawnAt?: string;
+  confirmedAt?: string;
+  confirmedByAdminId?: string;
 }
 
 export interface AttendanceRecord {

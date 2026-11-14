@@ -2,6 +2,27 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 let cachedAdminClient: SupabaseClient | null = null;
 let cachedAnonClient: SupabaseClient | null = null;
+let isSupabaseHealthy = true;
+let lastFailureTimestamp = 0;
+const FAILURE_COOLDOWN_MS = 60_000;
+
+export function markSupabaseUnhealthy(): void {
+  isSupabaseHealthy = false;
+  lastFailureTimestamp = Date.now();
+  console.warn('[Supabase Circuit Breaker] Supabase remote is unreachable or timed out. Tripped circuit breaker: using local database with 0ms latency.');
+}
+
+export function isSupabaseAvailable(): boolean {
+  if (!isSupabaseConfigured()) return false;
+  if (!isSupabaseHealthy) {
+    if (Date.now() - lastFailureTimestamp > FAILURE_COOLDOWN_MS) {
+      isSupabaseHealthy = true; // Retry after cooldown
+      return true;
+    }
+    return false;
+  }
+  return true;
+}
 
 export function isSupabaseConfigured(): boolean {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -20,7 +41,7 @@ export function isSupabaseConfigured(): boolean {
  * Never expose this client to the browser.
  */
 export function getSupabaseAdmin(): SupabaseClient | null {
-  if (!isSupabaseConfigured()) {
+  if (!isSupabaseAvailable()) {
     return null;
   }
 
@@ -37,11 +58,17 @@ export function getSupabaseAdmin(): SupabaseClient | null {
       autoRefreshToken: false,
     },
     global: {
-      fetch: (input, init) => {
-        return fetch(input, {
-          ...init,
-          cache: 'no-store',
-        });
+      fetch: async (input, init) => {
+        try {
+          return await fetch(input, {
+            ...init,
+            cache: 'no-store',
+            signal: AbortSignal.timeout(1500),
+          });
+        } catch (err) {
+          markSupabaseUnhealthy();
+          throw err;
+        }
       },
     },
   });
@@ -53,7 +80,7 @@ export function getSupabaseAdmin(): SupabaseClient | null {
  * Browser-safe Supabase client using Anon key.
  */
 export function getSupabaseClient(): SupabaseClient | null {
-  if (!isSupabaseConfigured()) {
+  if (!isSupabaseAvailable()) {
     return null;
   }
 

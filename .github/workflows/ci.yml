@@ -1,0 +1,37 @@
+name: CI - Build & Verification
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run TypeScript Type Check
+        run: npx tsc --noEmit
+
+      - name: Verify Production Build
+        run: npm run build
+        env:
+          NODE_ENV: production
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
+          JWT_SECRET: ci-test-secret-value-never-use-in-production-only-ci-build
+          INITIAL_SUPERADMIN_USERNAME: ucrtvrepb11
+          INITIAL_SUPERADMIN_PASSWORD: "TelevisionStudies#2026"
+

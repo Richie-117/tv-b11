@@ -1,6 +1,12 @@
 import fs from 'fs';
 import path from 'path';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  ListObjectsV2Command,
+  HeadObjectCommand,
+} from '@aws-sdk/client-s3';
 import { getSupabaseAdmin } from './supabase';
 
 export interface UploadResult {
@@ -8,6 +14,147 @@ export interface UploadResult {
   storageType: 'r2' | 'supabase' | 'local';
   fileName: string;
   fileSize: number;
+}
+
+export interface R2BackupItem {
+  key: string;
+  filename: string;
+  size: string;
+  bytes: number;
+  lastModified: string;
+  etag?: string;
+}
+
+/**
+ * Returns a configured S3Client targeting Cloudflare R2 if credentials are set
+ */
+export function getR2Client(): { client: S3Client; bucket: string } | null {
+  const r2AccountId = process.env.R2_ACCOUNT_ID;
+  const r2AccessKey = process.env.R2_ACCESS_KEY_ID;
+  const r2SecretKey = process.env.R2_SECRET_ACCESS_KEY;
+  const r2Bucket = process.env.R2_BUCKET_NAME || 'ucr-portal-assets';
+
+  if (!r2AccountId || !r2AccessKey || !r2SecretKey) {
+    return null;
+  }
+
+  const endpoint =
+    process.env.R2_ENDPOINT ||
+    `https://${r2AccountId}.r2.cloudflarestorage.com`;
+
+  const client = new S3Client({
+    region: 'auto',
+    endpoint,
+    credentials: {
+      accessKeyId: r2AccessKey,
+      secretAccessKey: r2SecretKey,
+    },
+  });
+
+  return { client, bucket: r2Bucket };
+}
+
+/**
+ * Uploads a disaster recovery backup JSON buffer directly to Cloudflare R2
+ */
+export async function uploadBackupToR2(
+  backupBuffer: Buffer,
+  key: string
+): Promise<{ success: boolean; key: string; size: number; etag?: string }> {
+  const r2 = getR2Client();
+  if (!r2) {
+    throw new Error('Cloudflare R2 storage credentials are not configured in environment.');
+  }
+
+  const putRes = await r2.client.send(
+    new PutObjectCommand({
+      Bucket: r2.bucket,
+      Key: key,
+      Body: backupBuffer,
+      ContentType: 'application/json',
+      Metadata: {
+        'portal-division': 'television-studies',
+        'batch-intake': 'batch-11-2026',
+        'backup-timestamp': new Date().toISOString(),
+      },
+    })
+  );
+
+  return {
+    success: true,
+    key,
+    size: backupBuffer.length,
+    etag: putRes.ETag,
+  };
+}
+
+/**
+ * Lists all online backup snapshots stored in the Cloudflare R2 bucket
+ */
+export async function listR2Backups(): Promise<R2BackupItem[]> {
+  const r2 = getR2Client();
+  if (!r2) return [];
+
+  try {
+    const listRes = await r2.client.send(
+      new ListObjectsV2Command({
+        Bucket: r2.bucket,
+        Prefix: 'backups/',
+      })
+    );
+
+    const contents = listRes.Contents || [];
+    return contents
+      .filter((obj) => obj.Key && obj.Key.endsWith('.json'))
+      .map((obj) => {
+        const bytes = obj.Size || 0;
+        const key = obj.Key!;
+        const filename = path.basename(key);
+        return {
+          key,
+          filename,
+          size: `${Math.round(bytes / 1024)} KB`,
+          bytes,
+          lastModified: obj.LastModified ? obj.LastModified.toISOString() : new Date().toISOString(),
+          etag: obj.ETag,
+        };
+      })
+      .sort((a, b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime());
+  } catch (err) {
+    console.warn('Failed to list R2 backups:', err);
+    return [];
+  }
+}
+
+/**
+ * Downloads a disaster recovery backup file directly from Cloudflare R2
+ */
+export async function downloadBackupFromR2(
+  key: string
+): Promise<{ buffer: Buffer; etag?: string; lastModified?: Date }> {
+  const r2 = getR2Client();
+  if (!r2) {
+    throw new Error('Cloudflare R2 storage credentials not configured.');
+  }
+
+  const getRes = await r2.client.send(
+    new GetObjectCommand({
+      Bucket: r2.bucket,
+      Key: key,
+    })
+  );
+
+  const chunks: Buffer[] = [];
+  for await (const chunk of getRes.Body as any) {
+    chunks.push(Buffer.from(chunk));
+  }
+
+  const buffer = Buffer.concat(chunks);
+  return {
+    buffer,
+    etag: getRes.ETag,
+    lastModified: getRes.LastModified,
+  };
 }
 
 /**

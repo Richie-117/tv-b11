@@ -6,13 +6,15 @@ import {
   StudentLabel,
   AttendanceSession,
   AttendanceRecord,
+  AttendanceCheckin,
+  CheckinStatus,
   Timetable,
   TimetableOverride,
   Assignment,
   CourseModule,
   CourseType,
 } from '@/types';
-import { isSupabaseConfigured, getSupabaseAdmin } from './supabase';
+import { isSupabaseConfigured, getSupabaseAdmin, markSupabaseUnhealthy } from './supabase';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
@@ -23,6 +25,7 @@ export interface DatabaseState {
   admins: (AdminUser & { passwordHash: string })[];
   attendanceSessions: AttendanceSession[];
   attendanceRecords: AttendanceRecord[];
+  attendanceCheckins?: AttendanceCheckin[];
   timetables: Timetable[];
   timetableOverrides: TimetableOverride[];
   assignments: Assignment[];
@@ -446,9 +449,10 @@ export async function getAttendanceSessionById(id: string): Promise<{ session: A
 
 export async function saveAttendanceSession(
   sessionData: Omit<AttendanceSession, 'id' | 'createdAt' | 'updatedAt'>,
-  records: Array<{ studentId: string; studentNumber: string; studentName: string; course: CourseType; status: 'present' | 'absent' | 'excused'; remarks?: string }>
+  records: Array<{ studentId: string; studentNumber: string; studentName: string; course: CourseType; status: 'present' | 'absent' | 'excused'; remarks?: string }>,
+  existingSessionId?: string
 ): Promise<AttendanceSession> {
-  const sessionId = `att-sess-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+  const sessionId = existingSessionId || `att-sess-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
   const now = new Date().toISOString();
 
   const session: AttendanceSession = {
@@ -456,6 +460,7 @@ export async function saveAttendanceSession(
     id: sessionId,
     createdAt: now,
     updatedAt: now,
+    checkinStatus: sessionData.checkinStatus || 'closed',
   };
 
   const newRecords: AttendanceRecord[] = records.map((r, i) => ({
@@ -474,39 +479,64 @@ export async function saveAttendanceSession(
   const supabase = getSupabaseAdmin();
   if (supabase) {
     try {
-      await supabase.from('attendance_sessions').insert({
-        id: session.id,
-        date: session.date,
-        course: session.course,
-        module_id: session.moduleId,
-        module_code: session.moduleCode,
-        module_title: session.moduleTitle,
-        session_type: session.sessionType,
-        start_time: session.startTime,
-        end_time: session.endTime,
-        total_students: session.totalStudents,
-        present_count: session.presentCount,
-        absent_count: session.absentCount,
-        marked_by_admin_id: session.markedByAdminId,
-        marked_by_admin_name: session.markedByAdminName,
-        notes: session.notes,
-        created_at: session.createdAt,
-        updated_at: session.updatedAt,
-      });
+      if (existingSessionId) {
+        await supabase.from('attendance_records').delete().eq('session_id', existingSessionId);
+        await supabase.from('attendance_sessions').update({
+          date: session.date,
+          course: session.course,
+          module_id: session.moduleId,
+          module_code: session.moduleCode,
+          module_title: session.moduleTitle,
+          session_type: session.sessionType,
+          start_time: session.startTime,
+          end_time: session.endTime,
+          total_students: session.totalStudents,
+          present_count: session.presentCount,
+          absent_count: session.absentCount,
+          checkin_status: session.checkinStatus || 'closed',
+          marked_by_admin_id: session.markedByAdminId,
+          marked_by_admin_name: session.markedByAdminName,
+          notes: session.notes,
+          updated_at: session.updatedAt,
+        }).eq('id', existingSessionId);
+      } else {
+        await supabase.from('attendance_sessions').insert({
+          id: session.id,
+          date: session.date,
+          course: session.course,
+          module_id: session.moduleId,
+          module_code: session.moduleCode,
+          module_title: session.moduleTitle,
+          session_type: session.sessionType,
+          start_time: session.startTime,
+          end_time: session.endTime,
+          total_students: session.totalStudents,
+          present_count: session.presentCount,
+          absent_count: session.absentCount,
+          checkin_status: session.checkinStatus || 'closed',
+          marked_by_admin_id: session.markedByAdminId,
+          marked_by_admin_name: session.markedByAdminName,
+          notes: session.notes,
+          created_at: session.createdAt,
+          updated_at: session.updatedAt,
+        });
+      }
 
-      const dbRecords = newRecords.map((r) => ({
-        id: r.id,
-        session_id: r.sessionId,
-        student_id: r.studentId,
-        student_number: r.studentNumber,
-        student_name: r.studentName,
-        course: r.course,
-        status: r.status,
-        remarks: r.remarks,
-        marked_at: r.markedAt,
-        updated_at: r.updatedAt,
-      }));
-      await supabase.from('attendance_records').insert(dbRecords);
+      if (newRecords.length > 0) {
+        const dbRecords = newRecords.map((r) => ({
+          id: r.id,
+          session_id: r.sessionId,
+          student_id: r.studentId,
+          student_number: r.studentNumber,
+          student_name: r.studentName,
+          course: r.course,
+          status: r.status,
+          remarks: r.remarks,
+          marked_at: r.markedAt,
+          updated_at: r.updatedAt,
+        }));
+        await supabase.from('attendance_records').insert(dbRecords);
+      }
     } catch (err) {
       console.warn('Supabase saveAttendance failed, saving locally:', err);
     }
@@ -515,7 +545,24 @@ export async function saveAttendanceSession(
   await saveLocalDatabase((state) => {
     if (!state.attendanceSessions) state.attendanceSessions = [];
     if (!state.attendanceRecords) state.attendanceRecords = [];
-    state.attendanceSessions.unshift(session);
+
+    if (existingSessionId) {
+      const existingIdx = state.attendanceSessions.findIndex((s) => s.id === existingSessionId);
+      if (existingIdx !== -1) {
+        state.attendanceSessions[existingIdx] = {
+          ...state.attendanceSessions[existingIdx],
+          ...session,
+          checkinStatus: session.checkinStatus || 'closed',
+          updatedAt: now,
+        };
+      } else {
+        state.attendanceSessions.unshift(session);
+      }
+      state.attendanceRecords = state.attendanceRecords.filter((r) => r.sessionId !== existingSessionId);
+    } else {
+      state.attendanceSessions.unshift(session);
+    }
+
     state.attendanceRecords.push(...newRecords);
   });
 
@@ -563,6 +610,230 @@ export async function getAttendanceRecords(): Promise<AttendanceRecord[]> {
 
   const db = await getLocalDatabase();
   return db.attendanceRecords || [];
+}
+
+// ==========================================
+// Student Attendance Self Check-ins
+// ==========================================
+export async function getAttendanceCheckins(sessionId?: string): Promise<AttendanceCheckin[]> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      let query = supabase.from('attendance_checkins').select('*');
+      if (sessionId) {
+        query = query.eq('session_id', sessionId);
+      }
+      const { data, error } = await query;
+      if (!error && data) {
+        return data.map((c: any) => ({
+          id: c.id,
+          sessionId: c.session_id,
+          studentId: c.student_id,
+          studentNumber: c.student_number,
+          studentName: c.student_name,
+          course: c.course,
+          status: c.status,
+          submittedAt: c.submitted_at,
+          withdrawnAt: c.withdrawn_at,
+          confirmedAt: c.confirmed_at,
+          confirmedByAdminId: c.confirmed_by_admin_id,
+        }));
+      }
+    } catch (err) {}
+  }
+
+  const db = await getLocalDatabase();
+  const list = db.attendanceCheckins || [];
+  if (sessionId) {
+    return list.filter((c) => c.sessionId === sessionId);
+  }
+  return list;
+}
+
+export async function saveAttendanceCheckin(
+  checkinData: Omit<AttendanceCheckin, 'id' | 'submittedAt'>
+): Promise<AttendanceCheckin> {
+  const id = `checkin-${checkinData.sessionId}-${checkinData.studentId}`;
+  const now = new Date().toISOString();
+  const checkin: AttendanceCheckin = {
+    ...checkinData,
+    id,
+    submittedAt: now,
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      await supabase.from('attendance_checkins').upsert({
+        id,
+        session_id: checkin.sessionId,
+        student_id: checkin.studentId,
+        student_number: checkin.studentNumber,
+        student_name: checkin.studentName,
+        course: checkin.course,
+        status: checkin.status,
+        submitted_at: checkin.submittedAt,
+        withdrawn_at: checkin.withdrawnAt || null,
+        confirmed_at: checkin.confirmedAt || null,
+        confirmed_by_admin_id: checkin.confirmedByAdminId || null,
+      });
+    } catch (err) {
+      console.warn('Supabase checkin upsert failed:', err);
+    }
+  }
+
+  await saveLocalDatabase((state) => {
+    if (!state.attendanceCheckins) state.attendanceCheckins = [];
+    const idx = state.attendanceCheckins.findIndex(
+      (c) => c.sessionId === checkin.sessionId && c.studentId === checkin.studentId
+    );
+    if (idx >= 0) {
+      state.attendanceCheckins[idx] = checkin;
+    } else {
+      state.attendanceCheckins.push(checkin);
+    }
+  });
+
+  return checkin;
+}
+
+export async function withdrawAttendanceCheckin(sessionId: string, studentId: string): Promise<boolean> {
+  const now = new Date().toISOString();
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      await supabase
+        .from('attendance_checkins')
+        .update({ status: 'withdrawn', withdrawn_at: now })
+        .eq('session_id', sessionId)
+        .eq('student_id', studentId);
+    } catch (err) {}
+  }
+
+  await saveLocalDatabase((state) => {
+    if (!state.attendanceCheckins) return;
+    const item = state.attendanceCheckins.find(
+      (c) => c.sessionId === sessionId && c.studentId === studentId
+    );
+    if (item) {
+      item.status = 'withdrawn';
+      item.withdrawnAt = now;
+    }
+  });
+
+  return true;
+}
+
+export async function updateAttendanceSessionCheckin(
+  sessionId: string,
+  checkinStatus: 'active' | 'closed' | 'expired',
+  expiresAt?: string
+): Promise<AttendanceSession | null> {
+  const now = new Date().toISOString();
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      await supabase
+        .from('attendance_sessions')
+        .update({
+          checkin_status: checkinStatus,
+          checkin_opened_at: checkinStatus === 'active' ? now : undefined,
+          checkin_expires_at: expiresAt || null,
+        })
+        .eq('id', sessionId);
+    } catch (err) {}
+  }
+
+  let updated: AttendanceSession | null = null;
+  await saveLocalDatabase((state) => {
+    const sess = (state.attendanceSessions || []).find((s) => s.id === sessionId);
+    if (sess) {
+      sess.checkinStatus = checkinStatus;
+      if (checkinStatus === 'active') {
+        sess.checkinOpenedAt = now;
+        sess.checkinExpiresAt = expiresAt;
+      }
+      updated = sess;
+    }
+  });
+
+  return updated;
+}
+
+export async function confirmAttendanceCheckins(
+  sessionId: string,
+  studentIds: string[],
+  adminId: string,
+  adminName: string
+): Promise<{ updatedCount: number; session: AttendanceSession | null }> {
+  const now = new Date().toISOString();
+  const studentIdSet = new Set(studentIds);
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      await supabase
+        .from('attendance_checkins')
+        .update({
+          status: 'confirmed',
+          confirmed_at: now,
+          confirmed_by_admin_id: adminId,
+        })
+        .eq('session_id', sessionId)
+        .in('student_id', studentIds);
+
+      for (const sid of studentIds) {
+        await supabase
+          .from('attendance_records')
+          .update({
+            status: 'present',
+            updated_at: now,
+          })
+          .eq('session_id', sessionId)
+          .eq('student_id', sid);
+      }
+    } catch (err) {
+      console.warn('Supabase confirmAttendanceCheckins failed:', err);
+    }
+  }
+
+  let updatedSession: AttendanceSession | null = null;
+  let count = 0;
+
+  await saveLocalDatabase((state) => {
+    if (!state.attendanceCheckins) state.attendanceCheckins = [];
+    if (!state.attendanceRecords) state.attendanceRecords = [];
+    if (!state.attendanceSessions) state.attendanceSessions = [];
+
+    state.attendanceCheckins.forEach((c) => {
+      if (c.sessionId === sessionId && studentIdSet.has(c.studentId)) {
+        c.status = 'confirmed';
+        c.confirmedAt = now;
+        c.confirmedByAdminId = adminId;
+        count++;
+      }
+    });
+
+    const sessRecords = state.attendanceRecords.filter((r) => r.sessionId === sessionId);
+    studentIds.forEach((sid) => {
+      const rec = sessRecords.find((r) => r.studentId === sid);
+      if (rec) {
+        rec.status = 'present';
+        rec.updatedAt = now;
+      }
+    });
+
+    const sess = state.attendanceSessions.find((s) => s.id === sessionId);
+    if (sess) {
+      sess.presentCount = sessRecords.filter((r) => r.status === 'present').length;
+      sess.absentCount = sessRecords.filter((r) => r.status === 'absent').length;
+      sess.excusedCount = sessRecords.filter((r) => r.status === 'excused').length;
+      sess.updatedAt = now;
+      updatedSession = sess;
+    }
+  });
+
+  return { updatedCount: count, session: updatedSession };
 }
 
 // ==========================================

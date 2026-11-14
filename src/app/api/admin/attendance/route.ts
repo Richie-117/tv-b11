@@ -4,6 +4,7 @@ import {
   saveAttendanceSession,
   deleteAttendanceSession,
   getAttendanceRecords,
+  getAttendanceCheckins,
   getStudents,
 } from '@/lib/db';
 import { requireAdminPermission } from '@/lib/auth';
@@ -76,9 +77,12 @@ export async function GET(req: NextRequest) {
     }
   });
 
+  const allCheckins = await getAttendanceCheckins();
+
   return NextResponse.json({
     sessions,
     records: allRecords,
+    checkins: allCheckins,
     metrics: {
       totalSessions,
       totalPresent,
@@ -98,7 +102,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { date, course, moduleId, moduleCode, moduleTitle, sessionType, startTime, endTime, notes, records } = body;
+    const { sessionId, date, course, moduleId, moduleCode, moduleTitle, sessionType, startTime, endTime, notes, records } = body;
 
     if (!date || !course || !moduleId || !records || !Array.isArray(records)) {
       return NextResponse.json({ error: 'Missing required session details or records array.' }, { status: 400 });
@@ -124,7 +128,8 @@ export async function POST(req: NextRequest) {
         markedByAdminName: auth.user.name,
         notes,
       },
-      records
+      records,
+      sessionId
     );
 
     await recordAdminAuditLog({

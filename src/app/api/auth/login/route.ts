@@ -17,6 +17,8 @@ export async function POST(req: NextRequest) {
 
     const isSuperAdminUser =
       cleanInput === envSuperAdmin ||
+      cleanInput === 'ucrtvrepb11' ||
+      cleanInput === 'ucrtvadmin' ||
       cleanInput === 'admin' ||
       cleanInput === 'superadmin';
 

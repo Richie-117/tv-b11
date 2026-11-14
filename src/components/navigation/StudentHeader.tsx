@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
 import { Tv, LogOut, Clock, User, Calendar, BookOpen, MessageSquare, LayoutDashboard, CheckSquare } from 'lucide-react';
+import { clearPortalCache } from '@/lib/portalCache';
 
 export default function StudentHeader() {
   const router = useRouter();
@@ -41,6 +42,7 @@ export default function StudentHeader() {
   }, []);
 
   const handleLogout = async () => {
+    clearPortalCache();
     await fetch('/api/auth/logout', { method: 'POST' });
     if (typeof window !== 'undefined') {
       localStorage.removeItem('ucr_user_role');

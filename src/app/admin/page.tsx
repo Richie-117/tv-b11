@@ -24,61 +24,95 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { CourseLiveLectureStatus, SriLankaTimeContext } from '@/lib/timetableService';
+import { getCached, setCached } from '@/lib/portalCache';
 
 export default function AdminDashboardPage() {
-  const [stats, setStats] = useState({
-    totalStudents: 48,
-    tpoptCount: 26,
-    tprptCount: 22,
-    repsCount: 4,
-    totalSessions: 0,
-    totalPresent: 0,
-    totalAbsent: 0,
-    attendanceRate: 0, // Starts at 0% with first mark
-    activeAssignments: 2,
+  const [currentUser, setCurrentUser] = useState<any>(() => {
+    return getCached<any>('admin_current_user') || null;
+  });
+
+  const [stats, setStats] = useState(() => {
+    const cached = getCached<any>('admin_dashboard_stats');
+    return (
+      cached || {
+        totalStudents: 48,
+        tpoptCount: 26,
+        tprptCount: 22,
+        repsCount: 4,
+        totalSessions: 0,
+        totalPresent: 0,
+        totalAbsent: 0,
+        attendanceRate: 0, // Starts at 0% with first mark
+        activeAssignments: 2,
+      }
+    );
   });
 
   const [liveStatus, setLiveStatus] = useState<{
     tpopt?: CourseLiveLectureStatus;
     tprpt?: CourseLiveLectureStatus;
     context?: SriLankaTimeContext;
-  } | null>(null);
+  } | null>(() => {
+    return getCached<any>('admin_dashboard_livestatus') || null;
+  });
 
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => {
+    return !getCached('admin_dashboard_stats');
+  });
 
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
-        const [attRes, ttRes, assignRes] = await Promise.all([
+        const [attRes, ttRes, assignRes, meRes] = await Promise.all([
           fetch('/api/admin/attendance'),
           fetch('/api/admin/timetable'),
           fetch('/api/admin/assignments'),
+          fetch('/api/auth/me'),
         ]);
+
+        if (meRes.ok) {
+          const meData = await meRes.json();
+          if (meData.authenticated && meData.user) {
+            setCurrentUser(meData.user);
+            setCached('admin_current_user', meData.user);
+          }
+        }
 
         if (attRes.ok) {
           const attData = await attRes.json();
           const sessCount = attData.metrics?.totalSessions || 0;
-          const rate = sessCount > 0 ? (attData.metrics?.overallPercentage || 0) : 0;
-          setStats((prev) => ({
-            ...prev,
+          const rate = sessCount > 0 ? attData.metrics?.overallPercentage || 0 : 0;
+          const newStats = {
+            totalStudents: 48,
+            tpoptCount: 26,
+            tprptCount: 22,
+            repsCount: 4,
             totalSessions: sessCount,
             totalPresent: attData.metrics?.totalPresent || 0,
             totalAbsent: attData.metrics?.totalAbsent || 0,
             attendanceRate: rate,
-          }));
+            activeAssignments: 2,
+          };
+          setStats(newStats);
+          setCached('admin_dashboard_stats', newStats);
         }
 
         if (ttRes.ok) {
           const ttData = await ttRes.json();
           setLiveStatus(ttData.liveStatus);
+          setCached('admin_dashboard_livestatus', ttData.liveStatus);
         }
 
         if (assignRes.ok) {
           const assignData = await assignRes.json();
-          setStats((prev) => ({
-            ...prev,
-            activeAssignments: assignData.assignments?.length || 0,
-          }));
+          setStats((prev: any) => {
+            const updated = {
+              ...prev,
+              activeAssignments: assignData.assignments?.length || 0,
+            };
+            setCached('admin_dashboard_stats', updated);
+            return updated;
+          });
         }
       } catch (err) {
         console.error('Error fetching dashboard data:', err);
@@ -327,7 +361,7 @@ export default function AdminDashboardPage() {
           </div>
           <Link
             href="/admin/timetable"
-            className="text-xs font-semibold text-[#0088FF] hover:underline flex items-center gap-1"
+            className="text-xs font-semibold text-[#0088FF] hover:text-[#38BDF8] active:scale-95 transition-all touch-target inline-flex items-center gap-1"
           >
             <span>Manage Schedule</span>
             <ArrowRight className="w-3.5 h-3.5" />
@@ -447,11 +481,20 @@ export default function AdminDashboardPage() {
 
       {/* 3. Quick Tools Launchpad Grid */}
       <div>
-        <h2 className="text-sm font-bold text-white mb-3 px-1">Quick Administrative Console Tools</h2>
+        <div className="flex items-center justify-between mb-3 px-1">
+          <h2 className="text-sm font-bold text-white">Quick Administrative Console Tools</h2>
+          <span className="text-[11px] text-slate-400">
+            {currentUser?.role === 'representative' ? (
+              <span className="text-[#38BDF8] font-bold">Representative Mode ({currentUser.representativeCourse || 'Cohort'})</span>
+            ) : (
+              <span className="text-[#FF7900] font-bold">SuperAdmin Console (Full Access)</span>
+            )}
+          </span>
+        </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <Link
             href="/admin/students"
-            className="flex flex-col items-center justify-center p-4 rounded-2xl bg-[#111827] hover:bg-[#161F30] border border-[#1E293B] transition-all text-center group"
+            className="flex flex-col items-center justify-center p-4 rounded-2xl bg-[#111827] hover:bg-[#161F30] border border-[#1E293B] hover:border-[#0088FF]/50 transition-all text-center group active:scale-95 touch-target select-none cursor-pointer shadow-md hover:shadow-lg hover:shadow-[#0088FF]/10"
           >
             <div className="w-10 h-10 rounded-xl bg-[#0088FF]/15 text-[#0088FF] flex items-center justify-center mb-2 group-hover:scale-105 transition-transform">
               <Users className="w-5 h-5" />
@@ -462,7 +505,7 @@ export default function AdminDashboardPage() {
 
           <Link
             href="/admin/chat"
-            className="flex flex-col items-center justify-center p-4 rounded-2xl bg-[#111827] hover:bg-[#161F30] border border-[#1E293B] transition-all text-center group"
+            className="flex flex-col items-center justify-center p-4 rounded-2xl bg-[#111827] hover:bg-[#161F30] border border-[#1E293B] hover:border-[#FF7900]/50 transition-all text-center group active:scale-95 touch-target select-none cursor-pointer shadow-md hover:shadow-lg hover:shadow-[#FF7900]/10"
           >
             <div className="w-10 h-10 rounded-xl bg-[#FF7900]/15 text-[#FF7900] flex items-center justify-center mb-2 group-hover:scale-105 transition-transform">
               <MessageSquare className="w-5 h-5" />
@@ -473,7 +516,7 @@ export default function AdminDashboardPage() {
 
           <Link
             href="/admin/tools"
-            className="flex flex-col items-center justify-center p-4 rounded-2xl bg-[#111827] hover:bg-[#161F30] border border-[#1E293B] transition-all text-center group"
+            className="flex flex-col items-center justify-center p-4 rounded-2xl bg-[#111827] hover:bg-[#161F30] border border-[#1E293B] hover:border-purple-500/50 transition-all text-center group active:scale-95 touch-target select-none cursor-pointer shadow-md hover:shadow-lg hover:shadow-purple-500/10"
           >
             <div className="w-10 h-10 rounded-xl bg-purple-500/15 text-purple-300 flex items-center justify-center mb-2 group-hover:scale-105 transition-transform">
               <FileText className="w-5 h-5" />
@@ -484,13 +527,22 @@ export default function AdminDashboardPage() {
 
           <Link
             href="/admin/invitations"
-            className="flex flex-col items-center justify-center p-4 rounded-2xl bg-[#111827] hover:bg-[#161F30] border border-[#1E293B] transition-all text-center group"
+            className="flex flex-col items-center justify-center p-4 rounded-2xl bg-[#111827] hover:bg-[#161F30] border border-[#1E293B] hover:border-emerald-500/50 transition-all text-center group active:scale-95 touch-target select-none cursor-pointer shadow-md hover:shadow-lg hover:shadow-emerald-500/10 relative"
           >
             <div className="w-10 h-10 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center mb-2 group-hover:scale-105 transition-transform">
               <KeyRound className="w-5 h-5" />
             </div>
             <span className="text-xs font-bold text-white">Student Invites</span>
             <span className="text-[10px] text-slate-400 mt-0.5">30-Day Tokens</span>
+            {currentUser?.role === 'representative' ? (
+              <span className="mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-[#1E293B] text-slate-400 border border-[#334155]">
+                Rep View
+              </span>
+            ) : (
+              <span className="mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                SuperAdmin
+              </span>
+            )}
           </Link>
         </div>
       </div>

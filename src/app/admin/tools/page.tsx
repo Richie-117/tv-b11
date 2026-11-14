@@ -96,7 +96,7 @@ export default function AdminToolsPage() {
             includeStudentId: true,
             includePhone: true,
             includeCourse: true,
-            includeBatch: true,
+            includeBatch: false,
             emptyColumnTitle: 'Remarks',
             customColumnTitle: '',
           };
@@ -120,7 +120,7 @@ export default function AdminToolsPage() {
             includeStudentId: true,
             includePhone: true,
             includeCourse: true,
-            includeBatch: true,
+            includeBatch: false,
             emptyColumnTitle: 'Signature',
           };
         default:
@@ -210,7 +210,7 @@ export default function AdminToolsPage() {
                 }`}
               >
                 <div className="font-bold">Academic Record</div>
-                <div className="text-[10px] text-text-muted mt-0.5">ID + Name + Course + Batch</div>
+                <div className="text-[10px] text-text-muted mt-0.5">ID + Name + Course</div>
               </button>
 
               <button

@@ -125,19 +125,7 @@ export function getActiveColumns(options: DocumentOptions): PreparedColumn[] {
     });
   }
 
-  const shouldIncludeBatch =
-    options.format === 'with_course' ||
-    (options.format === 'custom' && options.includeBatch);
-
-  if (shouldIncludeBatch) {
-    cols.push({
-      id: 'batch',
-      header: 'Batch',
-      width: 32,
-      align: 'left',
-      getValue: (s) => s.batch || '',
-    });
-  }
+  // Note: "Batch" column excluded per specification — Batch 11 is already permanently rendered in official header subtitle
 
   const shouldIncludePhone =
     options.format === 'simple' ||

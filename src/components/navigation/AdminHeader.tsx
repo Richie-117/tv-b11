@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { LogOut, Sliders, Shield, UserCheck, Clock, Tv } from 'lucide-react';
 import { AdminTokenPayload } from '@/lib/auth';
 import TabCustomizerModal from './TabCustomizerModal';
+import { clearPortalCache } from '@/lib/portalCache';
 
 interface AdminHeaderProps {
   user: AdminTokenPayload | null;
@@ -37,6 +38,7 @@ export default function AdminHeader({ user, onTabsChanged, visibleTabs }: AdminH
 
   const handleLogout = async () => {
     try {
+      clearPortalCache();
       await fetch('/api/auth/logout', { method: 'POST' });
       if (typeof window !== 'undefined') {
         localStorage.removeItem('ucr_user_role');

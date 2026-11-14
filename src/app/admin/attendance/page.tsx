@@ -26,10 +26,15 @@ import {
   Eye,
   X,
   Save,
+  Radio,
+  Smartphone,
+  Send,
+  CheckCheck,
 } from 'lucide-react';
-import { AttendanceSession, AttendanceRecord, CourseModule, Student, CourseType } from '@/types';
+import { AttendanceSession, AttendanceRecord, AttendanceCheckin, CourseModule, Student, CourseType } from '@/types';
 import { generateStudentsPDF, generateSessionAttendancePDF, DEFAULT_DOCUMENT_OPTIONS } from '@/lib/pdfGenerator';
 import { calculateAttendanceRate, isSessionValid, TRACKING_START_DATE } from '@/lib/attendanceCalculations';
+import { getCached, setCached } from '@/lib/portalCache';
 
 export default function AttendancePage() {
   const searchParams = useSearchParams();
@@ -40,10 +45,21 @@ export default function AttendancePage() {
     : 'dashboard';
   const initialCourse = (searchParams.get('course') as CourseType) || 'TPOPT';
 
-  const [sessions, setSessions] = useState<AttendanceSession[]>([]);
-  const [records, setRecords] = useState<AttendanceRecord[]>([]);
-  const [students, setStudents] = useState<Student[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const cachedAtt = getCached<any>('admin_attendance_data');
+  const cachedStudents = getCached<Student[]>('admin_students_list');
+
+  const [sessions, setSessions] = useState<AttendanceSession[]>(() => cachedAtt?.sessions || []);
+  const [records, setRecords] = useState<AttendanceRecord[]>(() => cachedAtt?.records || []);
+  const [checkins, setCheckins] = useState<AttendanceCheckin[]>(() => cachedAtt?.checkins || []);
+  const [students, setStudents] = useState<Student[]>(() => cachedStudents || []);
+  const [isLoading, setIsLoading] = useState(() => !cachedAtt);
+
+  // Push Check-in Modal state
+  const [checkinModalSession, setCheckinModalSession] = useState<AttendanceSession | null>(null);
+  const [checkinDuration, setCheckinDuration] = useState<number>(30);
+  const [isPushingCheckin, setIsPushingCheckin] = useState(false);
+  const [isConfirmingCheckin, setIsConfirmingCheckin] = useState<string | null>(null);
+  const [checkinFeedback, setCheckinFeedback] = useState<string | null>(null);
 
   // View Mode: 'dashboard' | 'marking' | 'absentees'
   const [viewMode, setViewMode] = useState<'dashboard' | 'marking' | 'absentees'>(initialMode);
@@ -73,6 +89,11 @@ export default function AttendancePage() {
   const [recordsMap, setRecordsMap] = useState<Record<string, 'present' | 'absent' | 'excused'>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
+
+  // Live Check-in for Marking session
+  const [liveCheckinSessionId, setLiveCheckinSessionId] = useState<string | null>(null);
+  const [liveCheckinActive, setLiveCheckinActive] = useState<boolean>(false);
+  const [checkedInStudentIds, setCheckedInStudentIds] = useState<Set<string>>(new Set());
 
   // Live Timetable Sync state
   const [liveTimetableData, setLiveTimetableData] = useState<any>(null);
@@ -254,11 +275,18 @@ export default function AttendancePage() {
         const d = await sessRes.json();
         setSessions(d.sessions || []);
         setRecords(d.records || []);
+        setCheckins(d.checkins || []);
+        setCached('admin_attendance_data', {
+          sessions: d.sessions || [],
+          records: d.records || [],
+          checkins: d.checkins || [],
+        });
       }
 
       if (stdRes.ok) {
         const d = await stdRes.json();
         setStudents(d.students || []);
+        setCached('admin_students_list', d.students || []);
       }
 
       if (ttRes.ok) {
@@ -288,14 +316,54 @@ export default function AttendancePage() {
     return students.filter((s) => s.course === markCourse);
   }, [students, markCourse]);
 
-  // Initialize attendance records when eligible students change
+  // Poll for active live check-in sessions while in marking mode
   useEffect(() => {
-    const initial: Record<string, 'present' | 'absent' | 'excused'> = {};
-    eligibleStudents.forEach((s) => {
-      initial[s.id] = 'present';
+    if (viewMode !== 'marking') return;
+
+    const pollActiveCheckins = async () => {
+      try {
+        const res = await fetch(`/api/admin/attendance/checkin/push?course=${markCourse}&date=${markDate}`);
+        if (res.ok) {
+          const d = await res.json();
+          if (d.hasActiveSession && d.session) {
+            setLiveCheckinActive(true);
+            setLiveCheckinSessionId(d.session.id);
+            const ids = new Set<string>(d.checkedInStudentIds || []);
+            setCheckedInStudentIds(ids);
+
+            // Automatically mark checked-in students as present in the roll-call list
+            if (ids.size > 0) {
+              setRecordsMap((prev) => {
+                const updated = { ...prev };
+                ids.forEach((id) => {
+                  updated[id] = 'present';
+                });
+                return updated;
+              });
+            }
+          } else {
+            setLiveCheckinActive(false);
+            setLiveCheckinSessionId(null);
+          }
+        }
+      } catch (e) {}
+    };
+
+    pollActiveCheckins();
+    const interval = setInterval(pollActiveCheckins, 3000);
+    return () => clearInterval(interval);
+  }, [viewMode, markCourse, markDate]);
+
+  // Initialize attendance records when eligible students change (default absent unless checked in)
+  useEffect(() => {
+    setRecordsMap((prev) => {
+      const initial: Record<string, 'present' | 'absent' | 'excused'> = {};
+      eligibleStudents.forEach((s) => {
+        initial[s.id] = prev[s.id] || (checkedInStudentIds.has(s.id) ? 'present' : 'absent');
+      });
+      return initial;
     });
-    setRecordsMap(initial);
-  }, [eligibleStudents]);
+  }, [eligibleStudents, checkedInStudentIds]);
 
   const handleMarkAllPresent = () => {
     const updated: Record<string, 'present' | 'absent' | 'excused'> = {};
@@ -315,10 +383,84 @@ export default function AttendancePage() {
 
   const toggleStudentStatus = (studentId: string) => {
     setRecordsMap((prev) => {
-      const current = prev[studentId] || 'present';
-      const next = current === 'present' ? 'absent' : current === 'absent' ? 'excused' : 'present';
+      const current = prev[studentId] || 'absent';
+      const next = current === 'absent' ? 'present' : current === 'present' ? 'excused' : 'absent';
       return { ...prev, [studentId]: next };
     });
+  };
+
+  const handlePushLiveCheckin = async () => {
+    const targetModule = academicModules.find((m) => m.id === markModuleId);
+    const selectedSlot = availableTimetableLectures.find(
+      (l) => l.id === selectedTimetableSlotId || `tt-${l.id}` === markModuleId
+    );
+
+    const moduleId = selectedSlot ? selectedSlot.mappedModuleId : targetModule?.id || 'sub-ict';
+    const moduleCode = selectedSlot ? selectedSlot.mappedModuleCode : targetModule?.code || 'ICT';
+    const moduleTitle = selectedSlot ? selectedSlot.mappedModuleTitle : targetModule?.title || 'Academic Lecture';
+
+    setIsPushingCheckin(true);
+    try {
+      const res = await fetch('/api/admin/attendance/checkin/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'open',
+          durationMinutes: 45,
+          date: markDate,
+          course: markCourse,
+          moduleId,
+          moduleCode,
+          moduleTitle,
+          sessionType: markSessionType,
+          startTime: markStartTime || selectedSlot?.startTime || '08:30',
+          endTime: markEndTime || selectedSlot?.endTime || '16:30',
+        }),
+      });
+
+      const d = await res.json();
+      if (res.ok) {
+        setLiveCheckinActive(true);
+        setLiveCheckinSessionId(d.session.id);
+        setSessions((prev) => {
+          const idx = prev.findIndex((s) => s.id === d.session.id);
+          if (idx !== -1) {
+            const copy = [...prev];
+            copy[idx] = d.session;
+            return copy;
+          }
+          return [d.session, ...prev];
+        });
+        alert(`Check-in is now live on student dashboards for ${moduleTitle}! Students who tap Check-In will automatically be marked Present.`);
+      } else {
+        alert(d.error || 'Failed to start check-in.');
+      }
+    } catch (e: any) {
+      alert(e.message || 'Error activating check-in.');
+    } finally {
+      setIsPushingCheckin(false);
+    }
+  };
+
+  const handleCloseLiveCheckin = async () => {
+    if (!liveCheckinSessionId) return;
+    setIsPushingCheckin(true);
+    try {
+      const res = await fetch('/api/admin/attendance/checkin/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: liveCheckinSessionId,
+          action: 'close',
+        }),
+      });
+      if (res.ok) {
+        setLiveCheckinActive(false);
+        alert('Check-in window closed.');
+      }
+    } catch (e) {} finally {
+      setIsPushingCheckin(false);
+    }
   };
 
   const handleSaveAttendance = async () => {
@@ -344,7 +486,7 @@ export default function AttendancePage() {
       studentNumber: s.studentNumber,
       studentName: s.fullName,
       course: s.course,
-      status: recordsMap[s.id] || 'present',
+      status: recordsMap[s.id] || 'absent',
     }));
 
     try {
@@ -352,6 +494,7 @@ export default function AttendancePage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          sessionId: liveCheckinSessionId || undefined,
           date: markDate,
           course: markCourse,
           moduleId,
@@ -367,7 +510,10 @@ export default function AttendancePage() {
 
       if (res.ok) {
         const data = await res.json();
-        setSessions((prev) => [data.session, ...prev]);
+        setSessions((prev) => [data.session, ...prev.filter((s) => s.id !== data.session.id)]);
+        setLiveCheckinActive(false);
+        setLiveCheckinSessionId(null);
+        setCheckedInStudentIds(new Set());
         fetchInitialData();
         setSaveSuccessMessage('Attendance recorded and audited successfully!');
         setTimeout(() => {
@@ -382,6 +528,106 @@ export default function AttendancePage() {
       alert('Error connecting to server.');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handlePushCheckin = async (
+    sessionId: string,
+    action: 'open' | 'close',
+    durationMinutes = 30
+  ) => {
+    setIsPushingCheckin(true);
+    setCheckinFeedback(null);
+    try {
+      const res = await fetch('/api/admin/attendance/checkin/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, action, durationMinutes }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSessions((prev) =>
+          prev.map((s) => (s.id === sessionId ? { ...s, ...data.session } : s))
+        );
+        if (checkinModalSession && checkinModalSession.id === sessionId) {
+          setCheckinModalSession((prev) => (prev ? { ...prev, ...data.session } : null));
+        }
+        setCheckinFeedback(data.message || 'Check-in status updated.');
+        fetchInitialData();
+        setTimeout(() => setCheckinFeedback(null), 3000);
+      } else {
+        alert(data.error || 'Failed to update check-in.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Network error updating check-in.');
+    } finally {
+      setIsPushingCheckin(false);
+    }
+  };
+
+  const handleConfirmCheckin = async (
+    sessionId: string,
+    studentId?: string,
+    confirmAll = false
+  ) => {
+    setIsConfirmingCheckin(studentId || 'all');
+    try {
+      const res = await fetch('/api/admin/attendance/checkin/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, studentId, confirmAll }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        if (data.session) {
+          setSessions((prev) =>
+            prev.map((s) => (s.id === sessionId ? { ...s, ...data.session } : s))
+          );
+          if (selectedDetailSession && selectedDetailSession.id === sessionId) {
+            setSelectedDetailSession((prev) => (prev ? { ...prev, ...data.session } : null));
+          }
+        }
+        if (data.checkins) {
+          setCheckins(data.checkins);
+        }
+        if (confirmAll) {
+          const sessCheckins = checkins.filter(
+            (c) => c.sessionId === sessionId && c.status === 'submitted'
+          );
+          setDetailRecordsMap((prev) => {
+            const copy = { ...prev };
+            sessCheckins.forEach((c) => {
+              copy[c.studentId] = 'present';
+            });
+            return copy;
+          });
+        } else if (studentId) {
+          setDetailRecordsMap((prev) => ({ ...prev, [studentId]: 'present' }));
+        }
+
+        setRecords((prev) => {
+          const targetIds = new Set(
+            confirmAll
+              ? checkins.filter((c) => c.sessionId === sessionId && c.status === 'submitted').map((c) => c.studentId)
+              : [studentId]
+          );
+          return prev.map((r) => {
+            if (r.sessionId === sessionId && targetIds.has(r.studentId)) {
+              return { ...r, status: 'present' };
+            }
+            return r;
+          });
+        });
+
+        setCheckinFeedback(data.message || 'Check-in confirmed.');
+        setTimeout(() => setCheckinFeedback(null), 2500);
+      } else {
+        alert(data.error || 'Failed to confirm check-in.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Error confirming check-in.');
+    } finally {
+      setIsConfirmingCheckin(null);
     }
   };
 
@@ -834,6 +1080,53 @@ export default function AttendancePage() {
                 </optgroup>
               </select>
             </div>
+
+            {/* Live Student Mobile Check-In Broadcast Bar */}
+            <div className="p-4 rounded-xl bg-gradient-to-r from-[#161F30] via-[#1E293B] to-[#161F30] border border-[#23324A] flex flex-col sm:flex-row items-center justify-between gap-3 shadow-lg">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {liveCheckinActive ? (
+                    <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-black border border-emerald-500/40 animate-pulse">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                      STUDENT CHECK-IN LIVE
+                    </span>
+                  ) : (
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <Radio className="w-4 h-4 text-[#FF7900]" />
+                      <span>Student Mobile Check-In:</span>
+                    </span>
+                  )}
+                  <span className="text-xs text-slate-300 font-medium">
+                    {liveCheckinActive
+                      ? `${checkedInStudentIds.size} student${checkedInStudentIds.size === 1 ? '' : 's'} checked in via mobile (auto-marked present)`
+                      : 'Push this lecture to student dashboards so students can self check-in.'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                {liveCheckinActive ? (
+                  <button
+                    type="button"
+                    disabled={isPushingCheckin}
+                    onClick={handleCloseLiveCheckin}
+                    className="w-full sm:w-auto px-4 py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-xs font-bold transition-all touch-target"
+                  >
+                    Close Check-In Window
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={isPushingCheckin}
+                    onClick={handlePushLiveCheckin}
+                    className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-[#FF7900] hover:bg-[#E66C00] text-white text-xs font-black shadow-lg shadow-[#FF7900]/25 transition-all active:scale-95 touch-target"
+                  >
+                    <Radio className="w-4 h-4 animate-pulse" />
+                    <span>Push to Check-In</span>
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* Rapid Thumb Roll-Call Controls */}
@@ -864,7 +1157,8 @@ export default function AttendancePage() {
           {/* Student Roll-Call List */}
           <div className="space-y-2">
             {eligibleStudents.map((s, index) => {
-              const status = recordsMap[s.id] || 'present';
+              const status = recordsMap[s.id] || 'absent';
+              const isMobileCheckedIn = checkedInStudentIds.has(s.id);
 
               return (
                 <div
@@ -897,7 +1191,15 @@ export default function AttendancePage() {
                     )}
 
                     <div className="min-w-0">
-                      <div className="text-xs font-mono text-slate-400">{s.studentNumber}</div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-mono text-slate-400">{s.studentNumber}</span>
+                        {isMobileCheckedIn && (
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold flex items-center gap-1 animate-in fade-in">
+                            <Smartphone className="w-3 h-3 text-emerald-400" />
+                            Checked In
+                          </span>
+                        )}
+                      </div>
                       <div className="text-sm font-bold text-white truncate">{s.fullName}</div>
                     </div>
                   </div>
@@ -1246,6 +1548,35 @@ export default function AttendancePage() {
                           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-1.5 py-0.5 rounded bg-[#1E293B]">
                             {session.sessionType}
                           </span>
+
+                          {/* Check-in status badge */}
+                          {session.checkinStatus === 'active' ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                              Check-in Live
+                            </span>
+                          ) : session.checkinStatus === 'closed' ? (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-[#1E293B] text-slate-400 border border-[#334155]">
+                              Check-in Closed
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-[#161F30] text-slate-500 border border-[#23324A]">
+                              Check-in Off
+                            </span>
+                          )}
+
+                          {(() => {
+                            const sessCheckins = checkins.filter((c) => c.sessionId === session.id);
+                            const pendingCount = sessCheckins.filter((c) => c.status === 'submitted').length;
+                            if (pendingCount > 0) {
+                              return (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FF7900]/20 text-[#FF7900] border border-[#FF7900]/40 animate-pulse">
+                                  {pendingCount} Pending Check-in{pendingCount > 1 ? 's' : ''}
+                                </span>
+                              );
+                            }
+                            return null;
+                          })()}
                         </div>
 
                         <h3 className="text-sm font-bold text-white">
@@ -1265,6 +1596,19 @@ export default function AttendancePage() {
                             {session.presentCount} present · {session.absentCount} absent
                           </div>
                         </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setCheckinModalSession(session)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all touch-target active:scale-95 ${
+                            session.checkinStatus === 'active'
+                              ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 shadow-sm shadow-emerald-500/20'
+                              : 'bg-[#FF7900]/15 hover:bg-[#FF7900]/25 text-[#FF7900] border border-[#FF7900]/30'
+                          }`}
+                        >
+                          <Radio className="w-3.5 h-3.5" />
+                          <span>{session.checkinStatus === 'active' ? 'Manage Check-in' : 'Push Check-in'}</span>
+                        </button>
 
                         <button
                           type="button"
@@ -1378,7 +1722,7 @@ export default function AttendancePage() {
               </button>
             </div>
 
-            {/* Modal Actions Bar (Export PDF & Export Excel) */}
+            {/* Modal Actions Bar (Export PDF & Export Excel & Confirm Check-ins) */}
             <div className="px-4 sm:px-5 py-3 bg-[#161F30]/60 border-b border-[#1E293B] flex flex-wrap items-center justify-between gap-2.5">
               <div className="flex items-center gap-2">
                 <span className="text-xs font-bold text-emerald-400">
@@ -1388,9 +1732,44 @@ export default function AttendancePage() {
                 <span className="text-xs font-bold text-rose-400">
                   {Object.values(detailRecordsMap).filter((v) => v === 'absent').length} Absent
                 </span>
+                {(() => {
+                  const pendingCount = checkins.filter(
+                    (c) => c.sessionId === selectedDetailSession.id && c.status === 'submitted'
+                  ).length;
+                  if (pendingCount > 0) {
+                    return (
+                      <>
+                        <span className="text-slate-600">·</span>
+                        <span className="text-xs font-bold text-[#FF7900] animate-pulse">
+                          {pendingCount} Pending Check-in{pendingCount > 1 ? 's' : ''}
+                        </span>
+                      </>
+                    );
+                  }
+                  return null;
+                })()}
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                {(() => {
+                  const pendingCount = checkins.filter(
+                    (c) => c.sessionId === selectedDetailSession.id && c.status === 'submitted'
+                  ).length;
+                  if (pendingCount > 0) {
+                    return (
+                      <button
+                        type="button"
+                        disabled={isConfirmingCheckin === 'all'}
+                        onClick={() => handleConfirmCheckin(selectedDetailSession.id, undefined, true)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold transition-all shadow-md shadow-emerald-500/25 active:scale-95 touch-target disabled:opacity-50"
+                      >
+                        <CheckCheck className="w-3.5 h-3.5" />
+                        <span>{isConfirmingCheckin === 'all' ? 'Confirming...' : `Confirm All (${pendingCount}) Pending`}</span>
+                      </button>
+                    );
+                  }
+                  return null;
+                })()}
                 <button
                   type="button"
                   disabled={isExportingSession}
@@ -1471,14 +1850,43 @@ export default function AttendancePage() {
 
                 return filtered.map((stu) => {
                   const currentStatus = detailRecordsMap[stu.id] || 'present';
+                  const stuCheckin = checkins.find(
+                    (c) => c.sessionId === selectedDetailSession.id && c.studentId === stu.id
+                  );
+
                   return (
                     <div
                       key={stu.id}
                       className="p-3 rounded-xl bg-[#161F30] border border-[#23324A] flex items-center justify-between gap-3 text-xs"
                     >
                       <div>
-                        <div className="font-mono text-slate-400 text-[11px] font-bold">{stu.studentNumber}</div>
-                        <div className="text-white font-bold">{stu.fullName}</div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-slate-400 text-[11px] font-bold">{stu.studentNumber}</span>
+                          {stuCheckin?.status === 'submitted' && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-[#FF7900]/20 text-[#FF7900] border border-[#FF7900]/40 animate-pulse">
+                              Pending Check-in
+                            </span>
+                          )}
+                          {stuCheckin?.status === 'confirmed' && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                              ✓ Check-in Confirmed
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-white font-bold mt-0.5">{stu.fullName}</div>
+                        {stuCheckin?.status === 'submitted' && (
+                          <div className="mt-1">
+                            <button
+                              type="button"
+                              disabled={isConfirmingCheckin === stu.id}
+                              onClick={() => handleConfirmCheckin(selectedDetailSession.id, stu.id)}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-[11px] font-bold shadow transition-all active:scale-95 touch-target"
+                            >
+                              <Check className="w-3 h-3" />
+                              <span>{isConfirmingCheckin === stu.id ? 'Confirming...' : 'Confirm Present'}</span>
+                            </button>
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-1.5">
@@ -1582,6 +1990,147 @@ export default function AttendancePage() {
               >
                 <Save className="w-3.5 h-3.5" />
                 <span>{isUpdatingSession ? 'Saving Changes...' : 'Save Updated Session'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Push Check-in Management Modal */}
+      {checkinModalSession && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-in fade-in">
+          <div className="bg-[#111827] border border-[#1E293B] rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-[#1E293B] pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-[#FF7900]/20 text-[#FF7900] flex items-center justify-center">
+                  <Radio className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Student Lecture Check-in</h3>
+                  <p className="text-xs text-slate-400">Push real-time roll-call to students&apos; mobile/desktop devices</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCheckinModalSession(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-[#1E293B]"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Session details */}
+            <div className="p-3.5 rounded-2xl bg-[#161F30] border border-[#23324A] space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold text-white">{checkinModalSession.moduleTitle}</span>
+                <span className="font-mono text-[11px] text-[#FF7900] font-bold">{checkinModalSession.course}</span>
+              </div>
+              <div className="text-[11px] text-slate-400">
+                Date: {checkinModalSession.date} · Type: {checkinModalSession.sessionType}
+              </div>
+              <div className="flex items-center gap-2 pt-1">
+                <span className="text-[11px] font-bold text-slate-300">Current Status:</span>
+                {checkinModalSession.checkinStatus === 'active' ? (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 animate-pulse flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    Active Check-in Live
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#1E293B] text-slate-400 border border-[#334155]">
+                    Closed / Not Published
+                  </span>
+                )}
+              </div>
+              {checkinModalSession.checkinExpiresAt && checkinModalSession.checkinStatus === 'active' && (
+                <div className="text-[11px] text-[#38BDF8]">
+                  Window open until: {new Date(checkinModalSession.checkinExpiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </div>
+              )}
+            </div>
+
+            {/* Live counts */}
+            {(() => {
+              const sessCheckins = checkins.filter((c) => c.sessionId === checkinModalSession.id);
+              const submittedCount = sessCheckins.filter((c) => c.status === 'submitted').length;
+              const confirmedCount = sessCheckins.filter((c) => c.status === 'confirmed').length;
+              const withdrawnCount = sessCheckins.filter((c) => c.status === 'withdrawn').length;
+
+              return (
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="p-2.5 rounded-xl bg-[#161F30] border border-[#23324A] text-center">
+                    <div className="text-[10px] font-bold text-amber-400 uppercase">Submitted</div>
+                    <div className="text-xl font-black text-white mt-0.5">{submittedCount}</div>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-[#161F30] border border-[#23324A] text-center">
+                    <div className="text-[10px] font-bold text-emerald-400 uppercase">Confirmed</div>
+                    <div className="text-xl font-black text-emerald-400 mt-0.5">{confirmedCount}</div>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-[#161F30] border border-[#23324A] text-center">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase">Withdrawn</div>
+                    <div className="text-xl font-black text-slate-300 mt-0.5">{withdrawnCount}</div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Duration Selector */}
+            <div>
+              <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                Check-in Window Duration (Minutes)
+              </label>
+              <div className="grid grid-cols-4 gap-2">
+                {[15, 30, 60, 120].map((mins) => (
+                  <button
+                    key={mins}
+                    type="button"
+                    onClick={() => setCheckinDuration(mins)}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold transition-all touch-target ${
+                      checkinDuration === mins
+                        ? 'bg-[#0088FF] text-white shadow-md shadow-[#0088FF]/20 ring-1 ring-[#0088FF]'
+                        : 'bg-[#161F30] text-slate-400 hover:text-white border border-[#23324A]'
+                    }`}
+                  >
+                    {mins} mins
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {checkinFeedback && (
+              <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold text-center">
+                {checkinFeedback}
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="pt-2 flex items-center justify-between gap-3 border-t border-[#1E293B]">
+              {checkinModalSession.checkinStatus === 'active' ? (
+                <button
+                  type="button"
+                  disabled={isPushingCheckin}
+                  onClick={() => handlePushCheckin(checkinModalSession.id, 'close')}
+                  className="px-4 py-2.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-xs font-bold transition-all disabled:opacity-50 touch-target"
+                >
+                  {isPushingCheckin ? 'Closing...' : 'Close Check-in Window'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={isPushingCheckin}
+                  onClick={() => handlePushCheckin(checkinModalSession.id, 'open', checkinDuration)}
+                  className="flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-[#FF7900] hover:bg-[#E66C00] text-white text-xs font-bold transition-all shadow-lg shadow-[#FF7900]/25 active:scale-95 touch-target disabled:opacity-50"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>{isPushingCheckin ? 'Publishing...' : `Publish Check-in (${checkinDuration}m)`}</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setCheckinModalSession(null)}
+                className="px-4 py-2.5 rounded-xl bg-[#1E293B] hover:bg-[#27354E] text-slate-300 hover:text-white border border-[#334155] text-xs font-bold transition-all touch-target"
+              >
+                Close
               </button>
             </div>
           </div>
