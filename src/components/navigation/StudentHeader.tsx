@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import { Tv, LogOut, Clock, User, Calendar, BookOpen, MessageSquare, LayoutDashboard, CheckSquare } from 'lucide-react';
+import { Tv, LogOut, Clock, User, Calendar, BookOpen, MessageSquare, LayoutDashboard, CheckSquare, ShieldCheck } from 'lucide-react';
 import { clearPortalCache } from '@/lib/portalCache';
 
 export default function StudentHeader() {
@@ -11,8 +11,18 @@ export default function StudentHeader() {
   const pathname = usePathname();
   const [sriLankaTimeStr, setSriLankaTimeStr] = useState('');
   const [studentPhoto, setStudentPhoto] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<any>(null);
 
   useEffect(() => {
+    fetch('/api/auth/me')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.authenticated && d.user) {
+          setCurrentUser(d.user);
+        }
+      })
+      .catch(() => {});
+
     fetch('/api/student/profile')
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -51,6 +61,8 @@ export default function StudentHeader() {
     router.refresh();
   };
 
+  const isRep = currentUser?.role === 'representative' || currentUser?.role === 'superadmin';
+
   const navLinks = [
     { label: 'Overview', href: '/student', icon: LayoutDashboard },
     { label: 'Attendance', href: '/student/attendance', icon: CheckSquare },
@@ -70,9 +82,16 @@ export default function StudentHeader() {
           <div>
             <div className="flex items-center gap-2">
               <span className="text-sm font-black text-white font-heading tracking-tight">UCR TV Studies</span>
-              <span className="px-2 py-0.5 text-[10px] font-extrabold rounded-full bg-[#0088FF]/20 text-[#38BDF8] border border-[#0088FF]/30">
-                Student
-              </span>
+              {isRep ? (
+                <span className="px-2 py-0.5 text-[10px] font-extrabold rounded-full bg-[#FF7900]/20 text-[#FF7900] border border-[#FF7900]/30 flex items-center gap-1">
+                  <ShieldCheck className="w-3 h-3" />
+                  Rep
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 text-[10px] font-extrabold rounded-full bg-[#0088FF]/20 text-[#38BDF8] border border-[#0088FF]/30">
+                  Student
+                </span>
+              )}
             </div>
             <span className="block text-[10px] text-slate-400">Batch 11 · 2026 Intake</span>
           </div>
@@ -102,6 +121,17 @@ export default function StudentHeader() {
 
         {/* Right Actions */}
         <div className="flex items-center gap-2 sm:gap-2.5">
+          {isRep && (
+            <Link
+              href="/admin"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#FF7900] to-[#E66C00] hover:brightness-110 text-white text-xs font-black shadow-md shadow-[#FF7900]/25 transition-all border border-[#FF7900]/30"
+              title="Open Admin Console to mark attendance and access PDF tools"
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Admin Console</span>
+            </Link>
+          )}
+
           <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#1E293B] text-xs text-slate-300 border border-[#334155]">
             <Clock className="w-3.5 h-3.5 text-[#0088FF]" />
             <span className="font-mono text-white text-[11px] font-bold">{sriLankaTimeStr}</span>

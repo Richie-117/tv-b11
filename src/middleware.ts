@@ -7,6 +7,25 @@ const JWT_SECRET = new TextEncoder().encode(
 
 const AUTH_COOKIE_NAME = 'ucr_admin_session';
 
+const BATCH_11_REP_INDICES = [
+  'RT/TPOPT/26/02',
+  'RT/TPOPT/26/22',
+  'RT/TPRPT/26/14',
+  'RT/TPRPT/26/21',
+];
+
+function isBatchRep(username?: string, userId?: string): boolean {
+  if (!username && !userId) return false;
+  const clean = (username || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  return (
+    BATCH_11_REP_INDICES.some((r) => r.replace(/[^a-zA-Z0-9]/g, '').toUpperCase() === clean) ||
+    userId === 'student-tpopt-005' ||
+    userId === 'student-tpopt-003' ||
+    userId === 'student-tprpt-002' ||
+    userId === 'student-tprpt-015'
+  );
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
@@ -43,8 +62,8 @@ export async function middleware(req: NextRequest) {
       loginUrl.searchParams.set('redirect', pathname);
       return NextResponse.redirect(loginUrl);
     }
-    // If student tries to enter admin area, redirect to student portal
-    if (sessionPayload.role === 'student') {
+    // If regular student tries to enter admin area, redirect to student portal
+    if (sessionPayload.role === 'student' && !isBatchRep(sessionPayload.username, sessionPayload.userId)) {
       return NextResponse.redirect(new URL('/student', req.url));
     }
     return NextResponse.next();
@@ -62,7 +81,7 @@ export async function middleware(req: NextRequest) {
 
   // 3. If accessing /login while already authenticated, redirect to appropriate console
   if (isLoginPage && sessionPayload) {
-    if (sessionPayload.role === 'superadmin' || sessionPayload.role === 'representative') {
+    if (sessionPayload.role === 'superadmin' || sessionPayload.role === 'representative' || isBatchRep(sessionPayload.username, sessionPayload.userId)) {
       return NextResponse.redirect(new URL('/admin', req.url));
     } else if (sessionPayload.role === 'student') {
       return NextResponse.redirect(new URL('/student', req.url));

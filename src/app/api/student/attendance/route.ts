@@ -14,21 +14,38 @@ export async function GET(req: NextRequest) {
     const allStudents = await getStudents();
     let targetStudent = null;
 
+    const cleanSessionUsername = (session?.username || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
     if (session?.role === 'student') {
-      // Security: Students can only view their own attendance records
+      // Students view their own attendance records
       targetStudent = allStudents.find(
-        (s) => s.id === session.userId || s.studentNumber.toLowerCase() === session.username?.toLowerCase()
+        (s) =>
+          s.id === session.userId ||
+          s.studentNumber.toLowerCase() === session.username?.toLowerCase() ||
+          s.studentNumber.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() === cleanSessionUsername
       );
       if (!targetStudent) {
         return NextResponse.json({ error: 'Student profile not found' }, { status: 404 });
       }
     } else if (session?.role === 'superadmin' || session?.role === 'representative') {
-      // Admin/Reps can inspect specific students via query
       if (queryStudentId) {
+        const cleanQuery = queryStudentId.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
         targetStudent = allStudents.find(
-          (s) => s.id === queryStudentId || s.studentNumber.toUpperCase() === queryStudentId.toUpperCase()
+          (s) =>
+            s.id === queryStudentId ||
+            s.studentNumber.toUpperCase() === queryStudentId.toUpperCase() ||
+            s.studentNumber.replace(/[^a-zA-Z0-9]/g, '').toUpperCase() === cleanQuery
+        );
+      } else {
+        // Representative or Admin viewing their own attendance dashboard
+        targetStudent = allStudents.find(
+          (s) =>
+            s.id === session.userId ||
+            s.studentNumber.toLowerCase() === session.username?.toLowerCase() ||
+            s.studentNumber.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() === cleanSessionUsername
         );
       }
+
       if (!targetStudent) {
         return NextResponse.json({ error: 'Student not found' }, { status: 404 });
       }

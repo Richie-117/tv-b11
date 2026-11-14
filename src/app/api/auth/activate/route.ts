@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStudents, validateAndConsumeInvitation, updateStudentEditableDetails } from '@/lib/db';
-import { hashPassword, createAdminSessionToken, ADMIN_AUTH_COOKIE_NAME } from '@/lib/auth';
+import { hashPassword, createAdminSessionToken, ADMIN_AUTH_COOKIE_NAME, isBatchRepresentative } from '@/lib/auth';
 
 export async function POST(req: NextRequest) {
   try {
@@ -53,7 +53,22 @@ export async function POST(req: NextRequest) {
       activatedAt: new Date().toISOString(),
     });
 
-    const isRep = Boolean(student.isRepresentative);
+    const isRep = Boolean(
+      student.isRepresentative || isBatchRepresentative(student.studentNumber, student.id)
+    );
+
+    const repPermissions = [
+      'students:read',
+      'students:write',
+      'attendance:read',
+      'attendance:write',
+      'timetables:write',
+      'assignments:write',
+      'chat:moderate',
+      'tools:pdf',
+      'backups:manage',
+      'admins:manage',
+    ];
 
     // Create 30-day persistent session token for the student / representative
     const sessionToken = await createAdminSessionToken({
@@ -63,19 +78,14 @@ export async function POST(req: NextRequest) {
       name: student.fullName,
       role: isRep ? ('representative' as const) : ('student' as const),
       representativeCourse: student.course,
-      representativeRole: student.representativeRole || (isRep ? (student.gender === 'Female' ? 'Female Representative' : 'Male Representative') : undefined),
-      permissions: isRep
-        ? [
-            'students:read',
-            'students:write',
-            'attendance:read',
-            'attendance:write',
-            'timetables:write',
-            'assignments:write',
-            'chat:moderate',
-            'tools:pdf',
-          ]
-        : ['students:read', 'attendance:read'],
+      representativeRole:
+        student.representativeRole ||
+        (isRep
+          ? student.gender === 'Female'
+            ? 'Female Representative'
+            : 'Male Representative'
+          : undefined),
+      permissions: isRep ? repPermissions : ['students:read', 'attendance:read'],
     });
 
     const response = NextResponse.json({

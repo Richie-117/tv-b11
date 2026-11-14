@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminByUsername, getStudents } from '@/lib/db';
-import { verifyPassword, createAdminSessionToken, ADMIN_AUTH_COOKIE_NAME } from '@/lib/auth';
+import { verifyPassword, createAdminSessionToken, ADMIN_AUTH_COOKIE_NAME, isBatchRepresentative } from '@/lib/auth';
 import { recordAdminAuditLog } from '@/lib/audit';
 
 export async function POST(req: NextRequest) {
@@ -129,17 +129,20 @@ export async function POST(req: NextRequest) {
 
     // 3. Check Activated Student & Representative Accounts
     const allStudents = await getStudents();
+    const cleanNoSlash = cleanInput.replace(/[^a-zA-Z0-9]/g, '');
+
     const student = allStudents.find(
       (s) =>
         s.studentNumber.toLowerCase() === cleanInput ||
-        s.studentNumber.replace(/\//g, '').toLowerCase() === cleanInput.replace(/\//g, '') ||
-        (s.email && s.email.toLowerCase() === cleanInput)
+        s.studentNumber.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() === cleanNoSlash ||
+        (s.email && s.email.toLowerCase() === cleanInput) ||
+        s.id === cleanInput
     );
 
     if (student && (student as any).isActivated && (student as any).passwordHash) {
       const isMatch = await verifyPassword(password, (student as any).passwordHash);
       if (isMatch) {
-        const isRep = Boolean(student.isRepresentative);
+        const isRep = Boolean(student.isRepresentative || isBatchRepresentative(student.studentNumber, student.id));
         const payload = {
           userId: student.id,
           username: student.studentNumber.toLowerCase(),
@@ -158,6 +161,8 @@ export async function POST(req: NextRequest) {
                 'assignments:write',
                 'chat:moderate',
                 'tools:pdf',
+                'backups:manage',
+                'admins:manage',
               ]
             : ['students:read', 'attendance:read'],
         };

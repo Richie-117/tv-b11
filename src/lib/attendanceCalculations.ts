@@ -134,8 +134,12 @@ export function calculateStudentAttendanceMetrics(
   });
 
   // Create record map by sessionId for quick lookup
+  const cleanStudentNum = (student.studentNumber || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
   const studentRecords = (records || []).filter(
-    (r) => r.studentId === student.id || r.studentNumber?.toUpperCase() === student.studentNumber?.toUpperCase()
+    (r) =>
+      r.studentId === student.id ||
+      r.studentNumber?.toUpperCase() === student.studentNumber?.toUpperCase() ||
+      (cleanStudentNum && (r.studentNumber || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase() === cleanStudentNum)
   );
   const recordMap = new Map<string, AttendanceRecord>();
   studentRecords.forEach((r) => recordMap.set(r.sessionId, r));

@@ -21,11 +21,13 @@ import {
   Radio,
   RotateCcw,
   Check,
+  ShieldCheck,
 } from 'lucide-react';
 import { CourseLiveLectureStatus, SriLankaTimeContext } from '@/lib/timetableService';
 import { getCached, setCached } from '@/lib/portalCache';
 
 export default function StudentDashboardPage() {
+  const [isRep, setIsRep] = useState(false);
   const [liveStatus, setLiveStatus] = useState<{
     tpopt?: CourseLiveLectureStatus;
     tprpt?: CourseLiveLectureStatus;
@@ -78,6 +80,15 @@ export default function StudentDashboardPage() {
   };
 
   useEffect(() => {
+    fetch('/api/auth/me')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.authenticated && (d.user?.role === 'representative' || d.user?.role === 'superadmin')) {
+          setIsRep(true);
+        }
+      })
+      .catch(() => {});
+
     fetch('/api/admin/timetable')
       .then((r) => r.json())
       .then((d) => {
@@ -179,6 +190,35 @@ export default function StudentDashboardPage() {
           </Link>
         </div>
       </div>
+
+      {/* Batch Representative Administrative Bar */}
+      {isRep && (
+        <div className="bg-gradient-to-r from-[#FF7900]/15 via-[#1E293B] to-[#0F172A] border border-[#FF7900]/40 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xl animate-in fade-in">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-[#FF7900]/20 border border-[#FF7900]/30 text-[#FF7900] flex items-center justify-center flex-shrink-0">
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-black text-white">Batch Representative Console Access</span>
+                <span className="px-2 py-0.5 rounded text-[10px] bg-[#FF7900] text-black font-extrabold uppercase">
+                  Admin Privileges
+                </span>
+              </div>
+              <p className="text-xs text-slate-300 mt-0.5">
+                Mark roll-call attendance, push live lecture check-ins, manage timetables, and export official PDF rosters.
+              </p>
+            </div>
+          </div>
+          <Link
+            href="/admin"
+            className="flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-[#FF7900] to-[#E66C00] hover:brightness-110 text-white text-xs font-black shadow-lg shadow-[#FF7900]/30 transition-all flex-shrink-0"
+          >
+            <span>Open Admin Console</span>
+            <ArrowRight className="w-4 h-4" />
+          </Link>
+        </div>
+      )}
 
       {/* Real-time Lecture Roll-Call Check-in Card */}
       {checkinState.hasActiveCheckin && checkinState.session && (

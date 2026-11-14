@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { LogOut, Sliders, Shield, UserCheck, Clock, Tv } from 'lucide-react';
+import { LogOut, Sliders, Shield, UserCheck, Clock, Tv, GraduationCap } from 'lucide-react';
 import { AdminTokenPayload } from '@/lib/auth';
 import TabCustomizerModal from './TabCustomizerModal';
 import { clearPortalCache } from '@/lib/portalCache';
@@ -107,6 +108,16 @@ export default function AdminHeader({ user, onTabsChanged, visibleTabs }: AdminH
                 </div>
               </div>
             )}
+
+            {/* Student Space Switch for Reps */}
+            <Link
+              href="/student"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#1E293B] hover:bg-[#27354E] text-[#0088FF] hover:text-white border border-[#334155] text-xs font-bold transition-colors touch-target"
+              title="Open Student Portal"
+            >
+              <GraduationCap className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Student Space</span>
+            </Link>
 
             {/* Quick Mobile Customizer Trigger */}
             <button

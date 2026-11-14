@@ -46,7 +46,9 @@ export default function LoginPage() {
           localStorage.setItem('ucr_user_role', data.user?.role || 'admin');
         }
 
-        if (data.user?.role === 'student') {
+        if (data.redirectUrl) {
+          router.push(data.redirectUrl);
+        } else if (data.user?.role === 'student') {
           router.push('/student');
         } else {
           router.push('/admin');
@@ -90,12 +92,19 @@ export default function LoginPage() {
       if (!res.ok) {
         setError(data.error || 'Account activation failed. Check your invitation code.');
       } else {
+        const isRep = Boolean(data.student?.isRepresentative || data.redirectUrl === '/admin');
         setActivateSuccess(data.message || 'Account activated successfully!');
         if (typeof window !== 'undefined') {
-          localStorage.setItem('ucr_user_role', 'student');
+          localStorage.setItem('ucr_user_role', isRep ? 'representative' : 'student');
         }
         setTimeout(() => {
-          router.push('/student');
+          if (data.redirectUrl) {
+            router.push(data.redirectUrl);
+          } else if (isRep) {
+            router.push('/admin');
+          } else {
+            router.push('/student');
+          }
           router.refresh();
         }, 1200);
       }

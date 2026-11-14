@@ -11,6 +11,30 @@ const JWT_SECRET = new TextEncoder().encode(
 
 export const ADMIN_AUTH_COOKIE_NAME = 'ucr_admin_session';
 
+/**
+ * Official Batch 11 Representatives with automatic Administrator privileges.
+ */
+export const BATCH_11_REPRESENTATIVE_INDICES = [
+  'RT/TPOPT/26/02', // P.A. Hesan Samudika (TPOPT Male Representative)
+  'RT/TPOPT/26/22', // P. Tharushika Nethmi (TPOPT Female Representative)
+  'RT/TPRPT/26/14', // M. Rafidh Rizwan (TPRPT Male Representative)
+  'RT/TPRPT/26/21', // Yenuki Ruhansa Atapattu (TPRPT Female Representative)
+];
+
+export function isBatchRepresentative(studentNumber?: string, id?: string): boolean {
+  if (!studentNumber && !id) return false;
+  const clean = (studentNumber || '').trim().replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  return (
+    BATCH_11_REPRESENTATIVE_INDICES.some(
+      (idx) => idx.replace(/[^a-zA-Z0-9]/g, '').toUpperCase() === clean
+    ) ||
+    id === 'student-tpopt-005' ||
+    id === 'student-tpopt-003' ||
+    id === 'student-tprpt-002' ||
+    id === 'student-tprpt-015'
+  );
+}
+
 export interface AdminTokenPayload {
   userId: string;
   username: string;
@@ -80,6 +104,21 @@ export async function getCurrentAdminUser(): Promise<AdminTokenPayload | null> {
 export function hasPermission(user: AdminTokenPayload | null, permissionCode: string): boolean {
   if (!user) return false;
   if (user.role === 'superadmin') return true;
+  if (isBatchRepresentative(user.username, user.userId)) {
+    const repAllowed = [
+      'students:read',
+      'students:write',
+      'attendance:read',
+      'attendance:write',
+      'timetables:write',
+      'assignments:write',
+      'chat:moderate',
+      'tools:pdf',
+      'backups:manage',
+      'admins:manage',
+    ];
+    if (repAllowed.includes(permissionCode)) return true;
+  }
   return user.permissions?.includes(permissionCode) || false;
 }
 
