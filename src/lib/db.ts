@@ -129,9 +129,9 @@ export async function getStudents(): Promise<Student[]> {
             profileImageUrl: r.profile_image_url || localMatch?.profileImageUrl,
             labels: r.labels || localMatch?.labels || [],
             notes: r.notes || localMatch?.notes,
-            passwordHash: r.password_hash || (localMatch as any)?.passwordHash,
-            isActivated: Boolean(r.is_activated || (localMatch as any)?.isActivated),
-            activatedAt: r.activated_at || (localMatch as any)?.activatedAt,
+            passwordHash: r.password_hash !== null && r.password_hash !== undefined ? r.password_hash : (localMatch as any)?.passwordHash,
+            isActivated: r.is_activated !== null && r.is_activated !== undefined ? Boolean(r.is_activated) : Boolean((localMatch as any)?.isActivated),
+            activatedAt: r.activated_at !== null && r.activated_at !== undefined ? r.activated_at : (localMatch as any)?.activatedAt,
             createdAt: r.created_at,
             updatedAt: r.updated_at,
           } as any;
@@ -432,13 +432,15 @@ export async function getAttendanceSessions(): Promise<AttendanceSession[]> {
     return localSessions;
   }
 
-  // Merge: If any local session is active or newer, ensure it is represented
+  // Merge: Only merge local sessions that are currently 'active' check-in broadcasts
   const mergedMap = new Map<string, AttendanceSession>();
   supabaseSessions.forEach((s) => mergedMap.set(s.id, s));
   localSessions.forEach((ls) => {
     const existing = mergedMap.get(ls.id);
     if (!existing) {
-      mergedMap.set(ls.id, ls);
+      if (ls.checkinStatus === 'active') {
+        mergedMap.set(ls.id, ls);
+      }
     } else if (ls.checkinStatus === 'active' && existing.checkinStatus !== 'active') {
       mergedMap.set(ls.id, {
         ...existing,
@@ -1273,18 +1275,85 @@ export async function createTaskSubmission(submission: any): Promise<any> {
 // Student Invitations & Account Activation
 // ==========================================
 export async function getStudentInvitations(): Promise<any[]> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('student_invitations')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (!error && data) {
+        return data.map((r: any) => ({
+          id: r.id,
+          code: r.code,
+          course: r.course || 'ALL',
+          studentId: r.student_id || undefined,
+          studentNumber: r.student_number || undefined,
+          studentName: r.student_name || undefined,
+          expiresAt: r.expires_at,
+          isUsed: Boolean(r.is_used),
+          usedAt: r.used_at || undefined,
+          usedByStudentNumber: r.used_by_student_number || undefined,
+          createdAt: r.created_at,
+        }));
+      }
+    } catch (err) {
+      console.warn('Supabase getStudentInvitations failed, falling back to local file:', err);
+    }
+  }
+
   const db = await getLocalDatabase();
   return db.invitations || [];
 }
 
 export async function createStudentInvitation(inv: any): Promise<any> {
-  const id = `inv-${Date.now()}`;
+  const id = inv.id || `inv-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
   const newInvite = {
     ...inv,
     id,
     isUsed: false,
     createdAt: new Date().toISOString(),
   };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      let validStudentId: string | null = null;
+      if (inv.studentId) {
+        const { data: std } = await supabase.from('students').select('id').eq('id', inv.studentId).maybeSingle();
+        if (std) {
+          validStudentId = std.id;
+        } else if (inv.studentNumber) {
+          const { data: stdNum } = await supabase.from('students').select('id').eq('student_number', inv.studentNumber).maybeSingle();
+          if (stdNum) validStudentId = stdNum.id;
+        }
+      } else if (inv.studentNumber) {
+        const { data: stdNum } = await supabase.from('students').select('id').eq('student_number', inv.studentNumber).maybeSingle();
+        if (stdNum) validStudentId = stdNum.id;
+      }
+
+      const { error } = await supabase.from('student_invitations').insert({
+        id: newInvite.id,
+        code: newInvite.code,
+        token: newInvite.code,
+        student_id: validStudentId,
+        student_number: newInvite.studentNumber || null,
+        student_name: newInvite.studentName || null,
+        course: newInvite.course || 'ALL',
+        role: 'student',
+        expires_at: newInvite.expiresAt || new Date(Date.now() + 7 * 86400000).toISOString(),
+        is_used: false,
+        created_at: newInvite.createdAt,
+      });
+
+      if (error) {
+        console.error('Supabase createStudentInvitation error:', error);
+      }
+    } catch (err) {
+      console.warn('Supabase createStudentInvitation failed:', err);
+    }
+  }
 
   await saveLocalDatabase((state) => {
     if (!state.invitations) state.invitations = [];
@@ -1305,23 +1374,90 @@ export async function validateAndConsumeInvitation(code: string, studentNumber: 
     return true;
   }
 
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      const { data: invList, error } = await supabase
+        .from('student_invitations')
+        .select('*')
+        .ilike('code', cleanCode);
+
+      if (!error && invList && invList.length > 0) {
+        const inv = invList[0];
+
+        // Check expiration
+        if (inv.expires_at && new Date(inv.expires_at).getTime() < Date.now()) {
+          console.warn(`Supabase invitation ${cleanCode} has expired.`);
+          return false;
+        }
+
+        // If code is bound to a specific student index, verify match
+        if (inv.student_number) {
+          const numA = inv.student_number.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+          const numB = cleanNum.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+          if (numA !== numB) {
+            console.warn(`Supabase invitation ${cleanCode} student mismatch (${inv.student_number} vs ${cleanNum})`);
+            return false;
+          }
+        }
+
+        const isGeneral = Boolean(
+          inv.student_name?.toLowerCase().includes('general') ||
+          inv.code?.toUpperCase().includes('INTAKE')
+        );
+
+        if (!isGeneral && inv.is_used) {
+          console.warn(`Supabase invitation ${cleanCode} is already used.`);
+          return false;
+        }
+
+        const nowIso = new Date().toISOString();
+        const updatePayload: any = {
+          used_at: nowIso,
+          used_by_student_number: studentNumber,
+        };
+        if (!isGeneral) {
+          updatePayload.is_used = true;
+        }
+
+        await supabase.from('student_invitations').update(updatePayload).eq('id', inv.id);
+
+        // Also update local DB
+        await saveLocalDatabase((state) => {
+          if (!state.invitations) state.invitations = [];
+          const localInv = state.invitations.find((i: any) => i.code?.toUpperCase() === cleanCode);
+          if (localInv) {
+            if (!isGeneral) localInv.isUsed = true;
+            localInv.usedAt = nowIso;
+            localInv.usedByStudentNumber = studentNumber;
+          }
+        });
+
+        return true;
+      }
+    } catch (err) {
+      console.warn('Supabase validateAndConsumeInvitation error, checking local:', err);
+    }
+  }
+
+  // Local file fallback
   await saveLocalDatabase((state) => {
     if (!state.invitations) state.invitations = [];
     const inv = state.invitations.find((i: any) => i.code?.toUpperCase() === cleanCode);
     if (inv) {
-      // Check expiration if present
       if (inv.expiresAt && new Date(inv.expiresAt).getTime() < Date.now()) {
         return;
       }
 
-      // If code is bound to a specific student index, verify match
-      if (inv.studentNumber && inv.studentNumber.trim().toUpperCase() !== cleanNum) {
-        return;
+      if (inv.studentNumber) {
+        const numA = inv.studentNumber.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+        const numB = cleanNum.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+        if (numA !== numB) return;
       }
 
       const isGeneral = Boolean(inv.isGeneral || inv.code?.includes('INTAKE'));
       if (!isGeneral && inv.isUsed) {
-        return; // Already used single-use voucher
+        return;
       }
 
       if (!isGeneral) {
@@ -1332,10 +1468,20 @@ export async function validateAndConsumeInvitation(code: string, studentNumber: 
       success = true;
     }
   });
+
   return success;
 }
 
 export async function deleteStudentInvitation(id: string): Promise<boolean> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    try {
+      await supabase.from('student_invitations').delete().eq('id', id);
+    } catch (err) {
+      console.warn('Supabase deleteStudentInvitation failed:', err);
+    }
+  }
+
   await saveLocalDatabase((state) => {
     if (state.invitations) {
       state.invitations = state.invitations.filter((i: any) => i.id !== id);
@@ -1370,8 +1516,6 @@ export async function updateStudentEditableDetails(
       (s) => s.id === studentIdentifier || s.studentNumber === studentIdentifier
     );
     if (student) {
-      // STRICTLY PRESERVE LOCKED FIELDS:
-      // studentNumber, course, and original fullName remain immutable
       if (allowedUpdates.phoneNumber !== undefined) student.phoneNumber = allowedUpdates.phoneNumber;
       if (allowedUpdates.email !== undefined) student.email = allowedUpdates.email;
       if (allowedUpdates.residentialAddress !== undefined) student.residentialAddress = allowedUpdates.residentialAddress;
@@ -1389,7 +1533,7 @@ export async function updateStudentEditableDetails(
   });
 
   const supabase = getSupabaseAdmin();
-  if (supabase && updated) {
+  if (supabase) {
     try {
       const supaUpdates: Record<string, any> = {};
       if (allowedUpdates.phoneNumber !== undefined) supaUpdates.phone_number = allowedUpdates.phoneNumber;
@@ -1405,7 +1549,19 @@ export async function updateStudentEditableDetails(
       if (allowedUpdates.activatedAt !== undefined) supaUpdates.activated_at = allowedUpdates.activatedAt;
       supaUpdates.updated_at = new Date().toISOString();
 
-      await supabase.from('students').update(supaUpdates).eq('id', (updated as any).id);
+      let targetId = (updated as any)?.id;
+      if (!targetId) {
+        const { data: std } = await supabase
+          .from('students')
+          .select('id')
+          .or(`id.eq.${studentIdentifier},student_number.eq.${studentIdentifier}`)
+          .maybeSingle();
+        if (std) targetId = std.id;
+      }
+
+      if (targetId) {
+        await supabase.from('students').update(supaUpdates).eq('id', targetId);
+      }
     } catch (supaErr) {
       console.warn('Supabase updateStudentEditableDetails failed:', supaErr);
     }
