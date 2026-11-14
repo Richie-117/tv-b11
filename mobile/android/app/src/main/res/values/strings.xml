@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">TV B11</string>
+    <string name="title_activity_main">TV B11</string>
+    <string name="package_name">lk.ac.ucr.tvb11</string>
+    <string name="custom_url">https://tv-b11.onrender.com</string>
+    <string name="offline_title">You are offline</string>
+    <string name="offline_message">Please check your internet connection to sync with the UCR Portal.</string>
+    <string name="offline_retry">Retry</string>
+</resources>

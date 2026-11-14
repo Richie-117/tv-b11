@@ -2,13 +2,18 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'UCR Portal | Division of Television Studies',
-  description: 'Official Mobile-First Academic & Administrative Portal for the Division of Television Studies, University College of Rathmalana.',
-  applicationName: 'UCR Portal',
+  title: 'TV B11 | Division of Television Studies',
+  description: 'Official Academic & Administrative Portal for the Division of Television Studies, University College of Rathmalana.',
+  applicationName: 'TV B11',
+  manifest: '/manifest.json',
+  icons: {
+    icon: '/icon.png',
+    apple: '/logo.png',
+  },
   appleWebApp: {
     capable: true,
-    statusBarStyle: 'default',
-    title: 'UCR Portal',
+    statusBarStyle: 'black-translucent',
+    title: 'TV B11',
   },
 };
 
@@ -17,7 +22,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 5,
   userScalable: true,
-  themeColor: '#5D4AE4',
+  themeColor: '#0B0F17',
   viewportFit: 'cover',
 };
 

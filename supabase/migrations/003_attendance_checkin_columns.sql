@@ -41,3 +41,4 @@ ALTER TABLE public.attendance_checkins ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Service role full access to attendance_checkins" ON public.attendance_checkins;
 CREATE POLICY "Service role full access to attendance_checkins" 
 ON public.attendance_checkins FOR ALL USING (true) WITH CHECK (true);
+

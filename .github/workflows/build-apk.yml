@@ -1,0 +1,81 @@
+name: Build Android APK (TV B11)
+
+on:
+  push:
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/build-apk.yml'
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Compile TV B11 Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 11076708
+
+      - name: Accept Android SDK Licenses & Install Build Tools
+        run: |
+          yes | sdkmanager --licenses || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Make Gradle Wrapper Executable
+        run: chmod +x mobile/android/gradlew
+
+      - name: Build Debug APK
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Prepare APK Asset
+        run: |
+          mkdir -p build-output
+          cp mobile/android/app/build/outputs/apk/debug/app-debug.apk build-output/TV-B11.apk
+          ls -la build-output/
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TV-B11-Android-APK
+          path: build-output/TV-B11.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: v1.0.0-apk
+          name: "TV B11 Mobile App (v1.0.0)"
+          body: |
+            ### 📱 TV B11 — Official Android Mobile App (Batch 11)
+            **Division of Television Studies · University College of Ratmalana**
+
+            #### Highlights:
+            - **Real-Time Web App Sync**: Seamlessly connected with the live portal (`https://tv-b11.onrender.com`).
+            - **Real-Time Attendance Roll-Call Check-In**: Students can tap Check-In directly from mobile.
+            - **Native Hardware Features**: Pull-to-refresh, file uploads for assignments, camera photo capture, and PDF/Excel document downloads to phone storage.
+            - **Fast & Lightweight**: High-performance hardware acceleration with Dark Charcoal (`#0B0F17`) and Amber Orange (`#FF7900`) styling.
+
+            #### Download & Install:
+            Download **`TV-B11.apk`** below and tap to install on any Android phone (Android 7.0+).
+          files: build-output/TV-B11.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
