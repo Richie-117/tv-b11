@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Lock, User, ArrowRight, AlertCircle, Tv, KeyRound, CheckCircle2, Sparkles } from 'lucide-react';
+import { clearPortalCache } from '@/lib/portalCache';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -42,6 +43,7 @@ export default function LoginPage() {
       if (!res.ok) {
         setError(data.error || 'Login failed. Please verify your credentials.');
       } else {
+        clearPortalCache();
         if (typeof window !== 'undefined') {
           localStorage.setItem('ucr_user_role', data.user?.role || 'admin');
         }
@@ -93,6 +95,7 @@ export default function LoginPage() {
         setError(data.error || 'Account activation failed. Check your invitation code.');
       } else {
         const isRep = Boolean(data.student?.isRepresentative || data.redirectUrl === '/admin');
+        clearPortalCache();
         setActivateSuccess(data.message || 'Account activated successfully!');
         if (typeof window !== 'undefined') {
           localStorage.setItem('ucr_user_role', isRep ? 'representative' : 'student');

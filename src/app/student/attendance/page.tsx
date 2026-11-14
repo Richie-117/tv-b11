@@ -53,7 +53,7 @@ export default function StudentAttendancePage() {
   const [selectedDayMark, setSelectedDayMark] = useState<CalendarMark | null>(null);
 
   useEffect(() => {
-    fetch('/api/student/attendance')
+    fetch('/api/student/attendance', { cache: 'no-store' })
       .then((r) => r.json())
       .then((d) => {
         if (d.success) {

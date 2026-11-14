@@ -432,15 +432,25 @@ export async function getAttendanceSessions(): Promise<AttendanceSession[]> {
     return localSessions;
   }
 
-  // Merge: Only merge local sessions that are currently 'active' check-in broadcasts
+  const DEMO_SESSION_IDS = new Set([
+    'att-sess-1794630267224-kmbp',
+    'att-sess-1794630179375-a5rj',
+    'att-sess-1794630067294-9qrs',
+  ]);
+
+  // Merge: Supabase sessions with local sessions (excluding old demo session IDs)
   const mergedMap = new Map<string, AttendanceSession>();
-  supabaseSessions.forEach((s) => mergedMap.set(s.id, s));
+  supabaseSessions.forEach((s) => {
+    if (!DEMO_SESSION_IDS.has(s.id)) {
+      mergedMap.set(s.id, s);
+    }
+  });
+
   localSessions.forEach((ls) => {
+    if (DEMO_SESSION_IDS.has(ls.id)) return;
     const existing = mergedMap.get(ls.id);
     if (!existing) {
-      if (ls.checkinStatus === 'active') {
-        mergedMap.set(ls.id, ls);
-      }
+      mergedMap.set(ls.id, ls);
     } else if (ls.checkinStatus === 'active' && existing.checkinStatus !== 'active') {
       mergedMap.set(ls.id, {
         ...existing,
@@ -660,7 +670,10 @@ export async function saveAttendanceSession(
           marked_at: r.markedAt,
           updated_at: r.updatedAt,
         }));
-        await supabase.from('attendance_records').insert(dbRecords);
+        const { error: recErr } = await supabase.from('attendance_records').upsert(dbRecords);
+        if (recErr) {
+          console.error('Supabase attendance_records upsert error:', recErr);
+        }
       }
     } catch (err) {
       console.warn('Supabase saveAttendance failed, saving locally:', err);
@@ -713,11 +726,14 @@ export async function deleteAttendanceSession(id: string): Promise<boolean> {
 
 export async function getAttendanceRecords(): Promise<AttendanceRecord[]> {
   const supabase = getSupabaseAdmin();
+  let supabaseRecords: AttendanceRecord[] = [];
+  let fetchedSupabase = false;
+
   if (supabase) {
     try {
       const { data, error } = await supabase.from('attendance_records').select('*');
       if (!error && data) {
-        return data.map((r: any) => ({
+        supabaseRecords = data.map((r: any) => ({
           id: r.id,
           sessionId: r.session_id,
           studentId: r.student_id,
@@ -729,12 +745,28 @@ export async function getAttendanceRecords(): Promise<AttendanceRecord[]> {
           markedAt: r.marked_at,
           updatedAt: r.updated_at,
         }));
+        fetchedSupabase = true;
       }
     } catch (err) {}
   }
 
   const db = await getLocalDatabase();
-  return db.attendanceRecords || [];
+  const localRecords = db.attendanceRecords || [];
+
+  if (!fetchedSupabase) {
+    return localRecords;
+  }
+
+  const map = new Map<string, AttendanceRecord>();
+  supabaseRecords.forEach((r) => map.set(`${r.sessionId}-${r.studentId || r.studentNumber}`, r));
+  localRecords.forEach((lr) => {
+    const key = `${lr.sessionId}-${lr.studentId || lr.studentNumber}`;
+    if (!map.has(key)) {
+      map.set(key, lr);
+    }
+  });
+
+  return Array.from(map.values());
 }
 
 // ==========================================

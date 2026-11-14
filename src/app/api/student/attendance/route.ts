@@ -85,26 +85,34 @@ export async function GET(req: NextRequest) {
       isValid: item.isValid,
     }));
 
-    return NextResponse.json({
-      success: true,
-      trackingStartDate: TRACKING_START_DATE,
-      student: {
-        id: targetStudent.id,
-        fullName: targetStudent.fullName,
-        studentNumber: targetStudent.studentNumber,
-        course: targetStudent.course,
+    return NextResponse.json(
+      {
+        success: true,
+        trackingStartDate: TRACKING_START_DATE,
+        student: {
+          id: targetStudent.id,
+          fullName: targetStudent.fullName,
+          studentNumber: targetStudent.studentNumber,
+          course: targetStudent.course,
+        },
+        stats: {
+          totalSessions: metrics.validSessionsCount,
+          presentCount: metrics.presentCount,
+          absentCount: metrics.absentCount,
+          excusedCount: metrics.excusedCount,
+          attendanceRate: metrics.rate,
+          formattedRate: metrics.formattedRate,
+          hasData: metrics.hasData,
+        },
+        calendarMarks,
       },
-      stats: {
-        totalSessions: metrics.validSessionsCount,
-        presentCount: metrics.presentCount,
-        absentCount: metrics.absentCount,
-        excusedCount: metrics.excusedCount,
-        attendanceRate: metrics.rate,
-        formattedRate: metrics.formattedRate,
-        hasData: metrics.hasData,
-      },
-      calendarMarks,
-    });
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          Pragma: 'no-cache',
+        },
+      }
+    );
   } catch (error) {
     console.error('Failed to retrieve student attendance:', error);
     return NextResponse.json({ error: 'Failed to retrieve student attendance' }, { status: 500 });

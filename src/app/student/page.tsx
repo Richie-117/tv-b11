@@ -105,7 +105,7 @@ export default function StudentDashboardPage() {
       })
       .catch(() => {});
 
-    fetch('/api/student/attendance')
+    fetch('/api/student/attendance', { cache: 'no-store' })
       .then((r) => r.json())
       .then((d) => {
         if (d.success && d.stats) {
